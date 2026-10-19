@@ -1,0 +1,750 @@
+<!DOCTYPE html><html><head>
+    
+  
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+		<title>WebGL Test</title>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+		<style>
+
+			body {
+
+				background-color: #000000;
+				margin: 0;
+				padding: 0;
+				overflow: hidden;
+				border: 0;
+				width:100%;
+				height:90vh;
+				display: flex;
+				justify-content: center;
+				align-items: flex-end;				
+			}
+
+			canvas {
+				position:fixed;
+				top:0;
+				bottom:0;
+			}
+
+			#text {
+				color:white;
+				bottom: 10px;
+				font-size: 25px;
+			}
+
+		</style>
+	</head>
+	<body style="cursor: default;">
+
+		<div id="text">Click to open the ball</div>
+
+		<!-- <audio id="audio">
+			<source src="sound.mp3" type="audio/mpeg">
+		</audio> -->
+		<!-- <script>
+			function play() {
+				document.getElementById("audio").src="sound.mp3";
+				document.getElementById("audio").play();
+			}
+			function stop() {
+				document.getElementById("audio").src="";
+			}
+		</script> -->
+
+
+		<!-- ACA VA EL CODIGO DEL SHADER, MANTENER LOS UNIFORMS time, mouse, resolution -->
+
+		<script id="shader" type="x-shader/x-fragment">
+
+
+#ifdef GL_ES
+	precision mediump float;
+#endif
+
+uniform float time;
+uniform vec2 mouse;
+uniform float mousedown;
+uniform vec2 resolution;
+uniform sampler2D backbuffer;
+
+#define iResolution resolution
+#define iMouse mouse
+#define iTime time
+
+// shadertoy begin ----------------------------------------------------
+
+const float det=.005;
+const float maxdist=50.;
+float objcol, flo;
+vec3 ldir=vec3(4.,-1.5,-1.);
+const vec3 lcol=vec3(.7,.3,.2);
+const vec3 ilcol=vec3(.6,.5,1.);
+float k;
+
+mat2 rot(float a) {
+	float s=sin(a), c=cos(a);
+    return mat2(c,s,-s,c);
+}
+
+vec3 fractal(vec2 p) {
+    float m=100., l=100.;
+    vec2 c=vec2(100.);
+    p*=.2;
+    for (int i=0; i<5; i++) {
+    	p=abs(p+.75)-abs(p-.75)-p;
+        p+=vec2(0.,2.);
+        p=p*2.5/clamp(dot(p,p),.2,1.)-1.5;
+        if (i>0) l=min(l,min(abs(p.x),abs(p.y)));
+        m=min(m,length(p));
+        c=min(c,abs(p));
+    }
+    l=exp(-6.*l)*pow(abs(.5-fract(m*.3+iTime))*2.,6.);
+    c=normalize(exp(-1.*c));
+    return l*vec3(c.x,length(p)*.015,c.y)*1.5;
+}
+
+vec3 rotate(vec3 p) {
+    p.xz*=rot(iTime);
+    p.yz*=rot(iTime*.5);
+	return p;
+}
+
+float de_light(vec3 p) {
+    return length(p)-1.5;
+}
+
+
+float de(vec3 p) {
+    //float op=smoothstep(.5,.7,sin(iTime*.5));
+    float op=k;
+    float r=-op*1.3;
+	float w=cos(length(p.xz*2.)-iTime*5.)*.15*smoothstep(0.,3.,length(p.xz));
+    w*=exp(-.1*length(p.xz));
+    float f=p.y+3.+w-r;
+    p=rotate(p);
+    float c1=abs(p.x)-op;
+    float c2=abs(p.y)-op;
+    float c3=abs(p.z)-op;
+	float c=min(min(c3,min(c1,c2)),length(p)-2.8+r);
+    float s=length(p)-3.+r;
+    float d=max(s,-c);
+    p=fract(p*5.);
+    float grid=min(abs(p.z),min(abs(p.x),abs(p.y)))*.5;
+    d=min(d,f);
+    objcol=max(step(c,d+.1),grid);
+    flo=step(f,d);
+    objcol=max(flo,objcol);
+    return d;
+}
+
+vec3 normal(vec3 p) {
+    vec3 e=vec3(0.,det*4.,0.);
+	return normalize(vec3(de(p+e.yxx),de(p+e.xyx),de(p+e.xxy))-de(p));
+}
+
+vec3 triplanar(vec3 p, vec3 n) {
+	p=rotate(p);
+    return fractal(p.yz) * abs(n.x) + fractal(p.xz) * abs(n.y) + fractal(p.xy) * abs(n.z);
+}
+
+float shadow(vec3 p, vec3 dir) {
+	float td=.0, sh=1., d=.2;
+    for (int i=0; i<60; i++) {
+        p-=d*dir;
+        d=de(p);
+        float dl=de_light(p);
+        td+=min(d,dl);
+        sh=min(sh,10.*d/td);
+        if (sh<.01 || dl<1.) break;
+    }
+    return clamp(sh,0.,1.);
+}
+
+
+vec3 shade(vec3 p, vec3 n, vec3 dir) {
+    float f=flo;
+    float ocol=objcol;
+    float sh=shadow(p,ldir);
+    float ish=shadow(p,normalize(p));
+    sh=max(sh,ish);
+    float amb=max(0.,dot(dir,-n))*.1;
+    float dif=max(0.,dot(ldir,-n))*sh;
+    vec3 ref=reflect(ldir,-n);
+    float spe=pow(max(0.,dot(dir,-ref)),50.);
+    vec3 fcol=triplanar(p,n)*(1.-ocol);
+    vec3 col=ocol*vec3(1.5)-f;
+    vec3 ildir=normalize(p);
+    float idif=max(0.,dot(ildir,-n))*exp(-.05*length(p));    
+    vec3 lref=reflect(ildir,-n);
+    float lspe=pow(max(0.,dot(dir,-lref)),30.)*ish;
+    return max((amb+dif*lcol)*col+spe*lcol,idif*ilcol*ish+lspe)+fcol;
+}
+
+
+vec3 march(vec3 from, vec3 dir) {
+	float d, dl, td=0., tdl=0., ref=0.;
+    vec3 p=from, refrom=from, pl=p, col=vec3(0.), savecol=col, odir=dir;
+    vec3 back=lcol*max(0.,1.-dir.y*3.)*.1;
+    for (int i=0; i<80; i++) {
+		p+=dir*d;
+		pl+=dir*dl;
+        d=de(p);
+        td+=d;
+        if (d<det && flo<.5) break;
+        if (td>maxdist) break;
+        if (d<det && flo>.5) {
+	        p-=det*dir*2.;
+            vec3 n=normal(p);
+            savecol=mix(shade(p,n,dir),back,td/maxdist);
+            dir=reflect(dir,n);
+            ref=.7;
+            refrom=p;
+        }
+    }
+    if (d<det) {
+        p-=det*dir*2.;
+        vec3 n=normal(p);
+    	col=shade(p,n,dir);
+    } else {
+      	back+=pow(max(0.,dot(dir,normalize(-ldir))),100.)*lcol;
+	    back+=pow(max(0.,dot(dir,normalize(-ldir))),200.)*.5;
+        col=back;
+        td=maxdist;
+    }
+    float li1=pow(max(0.,dot(dir,-normalize(refrom))),120.);
+    float li2=pow(max(0.,dot(odir,-normalize(from))),120.);
+    float li=max(li1,li2);
+    li*=step(length(from),distance(p,from));
+    col=mix(col,savecol,ref)+li*ilcol*2.;
+    
+    int steps=70;
+    float lmax=maxdist*.5;
+    float st=lmax/float(steps);
+    li=0.;
+    for (int i=0; i<300; i++) {
+		if (i>steps) break;
+    	p=from+odir*tdl;
+        tdl+=st;
+        if (tdl>td) break;
+        li+=shadow(p, normalize(p))*exp(-.25*length(p));
+    }
+    
+    return col+li*.035*ilcol;
+}
+
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+	vec4 back=texture2D(backbuffer,fragCoord.xy/iResolution.xy);
+    if (mousedown>.5) k=back.a+.025;
+    else k=back.a-.025;
+	ldir=normalize(ldir);
+    vec2 uv=(fragCoord-iResolution.xy*.5)/iResolution.y;
+	vec3 dir=normalize(vec3(uv,1.+sin(10.+iTime*.5)*.3));
+    vec3 from=vec3(0.,0.,-12.);
+    from.xz*=rot(iTime*.2);
+    dir.xz*=rot(iTime*.2);
+    dir.x+=sin(iTime*.5)*.3;
+    dir=normalize(dir);
+    vec3 col = march(from, dir);
+    fragColor = vec4(col,k);
+}
+
+// shadertoy end --------------------------------------------------------
+
+
+
+void main() {
+    vec4 color = vec4(0.);
+    mainImage(color,gl_FragCoord.xy);
+    gl_FragColor = color;
+}
+
+		</script>
+		
+		<!-- FIN DEL CODIGO DEL SHADER -->
+
+
+
+
+		<script id="fragmentShader" type="x-shader/x-fragment">
+
+			#ifdef GL_ES
+			precision mediump float;
+			#endif
+
+			uniform vec2 resolution;
+			uniform sampler2D texture;
+
+			void main() {
+
+				vec2 uv = gl_FragCoord.xy / resolution.xy;
+				gl_FragColor = texture2D( texture, uv );
+
+			}
+
+		</script>
+
+		<script id="vertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+
+			void main() {
+
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script id="surfaceVertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+			attribute vec2 surfacePosAttrib;
+			varying vec2 surfacePosition;
+
+			void main() {
+
+				surfacePosition = surfacePosAttrib;
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script>
+			var image = [];
+			var frame = 0;
+			var unicorn;
+			if ( !window.requestAnimationFrame ) {
+
+				window.requestAnimationFrame = ( function() {
+
+					return window.webkitRequestAnimationFrame ||
+						window.mozRequestAnimationFrame ||
+						window.oRequestAnimationFrame ||
+						window.msRequestAnimationFrame ||
+						function ( callback, element ) {
+
+							window.setTimeout( callback, 1000 / 60 );
+
+						};
+
+				} )();
+
+			}
+
+			if (!Date.now) {
+				Date.now = function() {
+					return +new Date();
+				};
+			}
+
+
+			var quality = 2.;
+			var canvas, gl, buffer, currentProgram, vertexPosition, screenVertexPosition,
+			parameters = { startTime: Date.now(), time: 0, mouseX: 0.5, mouseY: 0.5, mousedown: 0, screenWidth: 0, screenHeight: 0 },
+			surface = { centerX: 0, centerY: 0, width: 1, height: 1, lastX: 0, lastY: 0 },
+			frontTarget, backTarget, screenProgram, getWebGL, resizer = {};
+
+			init();
+			if (gl) { animate(); }
+
+			function init() {
+				canvas = document.createElement( 'canvas' );
+				canvas.style.display = 'block';
+				document.body.appendChild( canvas );
+
+				// Initialise WebGL
+
+				try {
+
+					gl = canvas.getContext( 'experimental-webgl', { preserveDrawingBuffer: true } );
+
+				} catch( error ) { }
+
+				if ( !gl ) {
+
+					alert("WebGL not supported, but code will be shown.");
+
+				} else {
+
+					// Create vertex buffer (2 triangles)
+
+					buffer = gl.createBuffer();
+					gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [ - 1.0, - 1.0, 1.0, - 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0 ] ), gl.STATIC_DRAW );
+
+					// Create surface buffer (coordinates at screen corners)
+
+					surface.buffer = gl.createBuffer();
+					unicorn = gl.createTexture();
+				}
+
+
+				if (gl) {
+
+					var surfaceMouseDown = function ( event ) {
+
+
+						surface.lastX = event.clientX;
+						surface.lastY = event.clientY;
+						event.preventDefault();
+
+					};
+
+					var noContextMenu = function ( event ) {
+
+						event.preventDefault();
+
+					};
+
+					//canvas.addEventListener( 'mousedown', surfaceMouseDown, false );
+
+					canvas.addEventListener( 'contextmenu', noContextMenu, false);
+				}
+
+				var clientXLast, clientYLast;
+				document.addEventListener( 'mousedown', function(){
+					parameters.mousedown = 1;
+					document.getElementById("text").remove();
+				});
+				document.addEventListener( 'mouseup', function(){
+					parameters.mousedown = 0;
+				});
+
+				document.addEventListener( 'mousemove', function ( event ) {
+
+					var clientX = event.clientX;
+					var clientY = event.clientY;
+
+					if (clientXLast == clientX && clientYLast == clientY)
+						return;
+
+					clientXLast = clientX;
+					clientYLast = clientY;
+
+					parameters.mouseX = clientX / window.innerWidth;
+					parameters.mouseY = 1 - clientY / window.innerHeight;
+
+				}, false );
+
+				onWindowResize();
+				window.addEventListener( 'resize', onWindowResize, false );
+				compile();
+				compileScreenProgram();
+				parameters.startTime=Date.now();
+
+			}
+
+			function computeSurfaceCorners() {
+
+				if (gl) {
+
+					surface.width = surface.height * parameters.screenWidth / parameters.screenHeight;
+
+					var halfWidth = surface.width * 0.5, halfHeight = surface.height * 0.5;
+
+					gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [
+						surface.centerX - halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY + halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight ] ), gl.STATIC_DRAW );
+
+				}
+
+			}
+
+			function resetSurface() {
+
+				surface.centerX = surface.centerY = 0;
+				surface.height = 1;
+				computeSurfaceCorners();
+
+			}
+
+
+			function compile() {
+
+				var getSourceSynch = function(url) {
+					var req = new XMLHttpRequest();
+					req.open("GET", url, false);
+					req.send(null);
+					return req.responseText;
+				};
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'shader' ).textContent;
+				var vertex = document.getElementById( 'surfaceVertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				if ( vs == null || fs == null ) return null;
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				if ( currentProgram ) {
+
+					gl.deleteProgram( currentProgram );
+					setURL( fragment );
+
+				}
+
+				currentProgram = program;
+
+
+				// Cache uniforms
+
+				cacheUniformLocation( program, 'time' );
+				cacheUniformLocation( program, 'mouse' );
+				cacheUniformLocation( program, 'mousedown' );
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'backbuffer' );
+				cacheUniformLocation( program, 'surfaceSize' );
+
+				// Load program into GPU
+
+				gl.useProgram( currentProgram );
+
+				// Set up buffers
+
+				surface.positionAttribute = gl.getAttribLocation(currentProgram, "surfacePosAttrib");
+				gl.enableVertexAttribArray(surface.positionAttribute);
+
+				vertexPosition = gl.getAttribLocation(currentProgram, "position");
+				gl.enableVertexAttribArray( vertexPosition );
+
+				console.log(gl.getShaderInfoLog(fs));
+			}
+
+			function compileScreenProgram() {
+
+				if (!gl) { return; }
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'fragmentShader' ).textContent;
+				var vertex = document.getElementById( 'vertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				screenProgram = program;
+
+				gl.useProgram( screenProgram );
+
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'texture' );
+				cacheUniformLocation( program, 'unicorn' );
+
+				screenVertexPosition = gl.getAttribLocation(screenProgram, "position");
+				gl.enableVertexAttribArray( screenVertexPosition );
+
+			}
+
+			function cacheUniformLocation( program, label ) {
+
+				if ( program.uniformsCache === undefined ) {
+
+					program.uniformsCache = {};
+
+				}
+
+				program.uniformsCache[ label ] = gl.getUniformLocation( program, label );
+
+			}
+
+			//
+
+			function createTarget( width, height ) {
+
+				var target = {};
+
+				target.framebuffer = gl.createFramebuffer();
+				target.renderbuffer = gl.createRenderbuffer();
+				target.texture = gl.createTexture();
+
+				// set up framebuffer
+
+				gl.bindTexture( gl.TEXTURE_2D, target.texture );
+				gl.texImage2D( gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST );
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, target.framebuffer );
+				gl.framebufferTexture2D( gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0 );
+
+				// set up renderbuffer
+
+				gl.bindRenderbuffer( gl.RENDERBUFFER, target.renderbuffer );
+
+				gl.renderbufferStorage( gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, width, height );
+				gl.framebufferRenderbuffer( gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, target.renderbuffer );
+
+				// clean up
+
+				gl.bindTexture( gl.TEXTURE_2D, null );
+				gl.bindRenderbuffer( gl.RENDERBUFFER, null );
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null);
+
+
+				return target;
+
+			}
+
+			function createRenderTargets() {
+
+				frontTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+				backTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+
+			}
+
+			//
+
+
+			function createShader( src, type ) {
+
+				var shader = gl.createShader( type );
+				gl.shaderSource( shader, src );
+				gl.compileShader( shader );
+				return shader;
+
+			}
+
+			//
+
+			function onWindowResize( event ) {
+
+				var isMaxWidth = ((resizer.currentWidth === resizer.maxWidth) || (resizer.currentWidth === resizer.minWidth)),
+					isMaxHeight = ((resizer.currentHeight === resizer.maxHeight) || (resizer.currentHeight === resizer.minHeight));
+
+
+				resizer.isResizing = false;
+				resizer.maxWidth = window.innerWidth - 75;
+				resizer.maxHeight = window.innerHeight - 125;
+				if (isMaxWidth || (resizer.currentWidth > resizer.maxWidth)) {
+					resizer.currentWidth = resizer.maxWidth;
+				}
+				if (isMaxHeight || (resizer.currentHeight > resizer.maxHeight)) {
+					resizer.currentHeight = resizer.maxHeight;
+				}
+				if (resizer.currentWidth < resizer.minWidth) { resizer.currentWidth = resizer.minWidth; }
+				if (resizer.currentHeight < resizer.minHeight) { resizer.currentHeight = resizer.minHeight; }
+
+				canvas.width = window.innerWidth / quality;
+				canvas.height = window.innerHeight / quality;
+
+				canvas.style.width = window.innerWidth + 'px';
+				canvas.style.height = window.innerHeight + 'px';
+
+				parameters.screenWidth = canvas.width;
+				parameters.screenHeight = canvas.height;
+
+				computeSurfaceCorners();
+
+				if (gl) {
+
+					gl.viewport( 0, 0, canvas.width, canvas.height );
+
+					createRenderTargets();
+
+				}
+			}
+
+			//
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				render();
+
+			}
+			function render() {
+
+				if ( !currentProgram ) return;
+				frame++;
+				parameters.time = Date.now() - parameters.startTime;
+				//parameters.time = parameters.time % 800 + 17300;
+
+				// Set uniforms for custom shader
+
+				gl.useProgram( currentProgram );
+
+				gl.uniform1f( currentProgram.uniformsCache[ 'time' ], parameters.time / 1000 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'mouse' ], parameters.mouseX, parameters.mouseY );
+				gl.uniform1f( currentProgram.uniformsCache[ 'mousedown' ], parameters.mousedown );
+				gl.uniform2f( currentProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( currentProgram.uniformsCache[ 'backbuffer' ], 0 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'surfaceSize' ], surface.width, surface.height );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+				gl.vertexAttribPointer( surface.positionAttribute, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( vertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE0 );
+				gl.bindTexture( gl.TEXTURE_2D, backTarget.texture );
+
+				// Render custom shader to front buffer
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, frontTarget.framebuffer );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Set uniforms for screen shader
+
+				gl.useProgram( screenProgram );
+
+				gl.uniform2f( screenProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( screenProgram.uniformsCache[ 'texture' ], 1 );
+				gl.uniform1i( screenProgram.uniformsCache[ 'unicorn' ], 1 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( screenVertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE1 );
+				gl.bindTexture( gl.TEXTURE_2D, frontTarget.texture );
+
+				// Render front buffer to screen
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Swap buffers
+
+				var tmp = frontTarget;
+				frontTarget = backTarget;
+				backTarget = tmp;
+
+			}
+			
+
+		</script>
+
+</body></html>

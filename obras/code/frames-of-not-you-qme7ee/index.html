@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+	<script id="fxhash-snippet">
+      let alphabet = "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+      var fxhash = new URLSearchParams(window.location.search).get('fxhash')
+      let b58dec = str=>[...str].reduce((p,c)=>p*alphabet.length+alphabet.indexOf(c)|0, 0)
+      let fxhashTrunc = fxhash.slice(2)
+      let regex = new RegExp(".{" + ((fxhashTrunc.length/4)|0) + "}", 'g')
+      let hashes = fxhashTrunc.match(regex).map(h => b58dec(h))
+      let sfc32 = (a, b, c, d) => {
+        return () => {
+          a |= 0; b |= 0; c |= 0; d |= 0
+          var t = (a + b | 0) + d | 0
+          d = d + 1 | 0
+          a = b ^ b >>> 9
+          b = c + (c << 3) | 0
+          c = c << 21 | c >>> 11
+          c = c + t | 0
+          return (t >>> 0) / 4294967296
+        }
+      }
+      var fxrand = sfc32(...hashes)
+      // used to get features during token mint
+      window.addEventListener("message", (event) => {
+        if (event.data === "fxhash_getFeatures") {
+          parent.postMessage({
+            id: "fxhash_getFeatures",
+            data: window.$fxhashFeatures
+          }, "*")
+        }
+      })
+      function fxpreview() {
+        window.dispatchEvent(new Event("fxhash-preview"))
+        setTimeout(() => fxpreview(), 500)
+      }
+</script>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+		<title>WebGL Test</title>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+		<style>
+
+			body {
+
+				background-color: #000000;
+				margin: 0;
+				padding: 0;
+				overflow: hidden;
+				border: 0;
+				width:100%;
+				height:100%;
+
+			}
+
+
+		</style>
+	</head>
+	<body style="cursor: default;">
+
+
+
+
+		
+
+		<script id="shader" type="x-shader/x-fragment">
+
+
+#ifdef GL_ES
+	precision mediump float;
+#endif
+
+
+
+
+float speed = 0.02;        
+uniform float time;
+uniform vec2 resolution;
+uniform vec2 mouse;
+uniform float fxrand;
+#define iTime time
+
+// RESTAR UN OBJETO A OTRO 
+
+// Igual al ejemplo anterior, pero reemplazamos la esfera central
+// por otro objeto que resulta de restarle a un cubo la esfera
+
+
+//#define fxrand (mouse.x)
+#define hash1 rnd(fxrand)
+#define hash2 rnd(fxrand+.1)
+#define hash3 rnd(fxrand+.2)
+#define hash4 rnd(fxrand+.3)
+#define hash5 rnd(fxrand+.4)
+#define hash6 rnd(fxrand+.5)
+#define hash7 rnd(fxrand+.6)
+#define hash8 rnd(fxrand+.5)
+#define hash9 rnd(fxrand+.6)
+
+
+float rnd(float p)
+{
+    p*=1234.5678;
+    p = fract(p * .1031);
+    p *= p + 33.33;
+    return fract(2.*p*p);
+}
+
+
+
+vec3 hsv2rgb(vec3 c)
+    {
+        vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+        vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+        return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    }
+    
+  float hash(float h) {
+	return fract(sin(h) * 43758.5453123);
+}
+
+float noise(vec3 x) {
+	vec3 p = floor(x);
+	vec3 f = fract(x);
+	f = f * f * (3.0 - 2.0 * f);
+
+	float n = p.x + p.y * 157.0 + 113.0 * p.z;
+	return mix(
+			mix(mix(hash(n + 0.0), hash(n + 1.0), f.x),
+					mix(hash(n + 157.0), hash(n + 158.0), f.x), f.y),
+			mix(mix(hash(n + 113.0), hash(n + 114.0), f.x),
+					mix(hash(n + 270.0), hash(n + 271.0), f.x), f.y), f.z);
+}
+
+float fbm(vec3 p) {
+	float f = 0.0;
+	f = 0.5000 * noise(p);
+	p *= 2.01;
+	f += 0.2500 * noise(p);
+	p *= 2.02;
+	f += 0.1250 * noise(p);
+
+	return f;
+}
+ 
+    
+ 
+                  
+            
+   
+
+// VARIABLES GLOBALES
+
+float det = 0.003;
+float maxdist = 100.;
+int maxsteps = 150;
+vec3 objcol;
+
+// FUNCION DE ROTACION
+
+mat2 rot(float a) {
+    float s=sin(a), c=cos(a);
+    return mat2(c,s,-s,c);
+}
+
+
+// FUNCIONES DE DISTANCIA PRIMITIVAS 
+
+float sphere(vec3 p, float rad) 
+{
+    return length(p) - rad;
+}
+
+float box(vec3 p, vec3 c)
+{
+    p=abs(p)-c;
+    return length(max(p,0.))+min(0.,max(p.z,max(p.x,p.y)));
+}
+
+// construccion de un objeto usando las primitivas combinadas con max
+// para obtener su interseccion. Esto generará una forma que es igual
+// al espacio donde formas combinadas se intersecten.
+// en este caso intersectamos un cubo con una esfera
+
+float obj1(vec3 p,vec3 s) 
+{
+
+    //s.y+=1.-abs(p.x);
+    //s.y*=.2;
+    float box = box(p, s);
+
+   // p.y+=fract(p.y*.1+time);
+    //p.x+=fract(time);09
+    float sph = sphere(p,0.5);
+    float d = box;
+    return d;
+}
+
+float obj2(vec3 p) 
+{
+    float box = box(p, vec3(0.2,0.1,0.2));
+  
+    // de esta manera le restamos al cubo la forma de la esfera
+    float d = box;
+    return d;
+}
+
+
+// FUNCION DE ESTIMACION DE DISTANCIA
+    
+    
+float de(vec3 p) 
+{
+	p.yz*=rot(.4);
+	vec3 pp=p;
+	p.z*=.75;
+	p.xy*=.3+hash1*.5;
+	p.y+=.5+sin(p.z);
+	p.x+=5.6;
+	p.xy*=rot(p.z*hash2*.1+time*.025);
+	float time2 = iTime*speed;
+    float ms = floor(1.0)+1.;
+	ms = 1.0;  
+    //asdasd 
+    //p.z+=time2*10.; asdas  
+    float indexy = floor(p.y/ms); 
+	float indexz = floor(p.z/ms);  
+    // rotamos en dos ejes  
+   // p.xy *= rot(time2*.03+indexy);  
+	//p.xz *= rot(time2*.0+indexy); 
+//asdas
+    float indexx = floor(p.x/ms);
+   // abs(cant-mod(p,cant*2.))
+   // p.y = abs(ms-mod(p.y,ms*2.));    
+    // p.x = abs(ms-mod(p.x,ms*2.));
+	// p.z = abs(ms-mod(p.z,ms*2.))-ms/2.;
+    p.x = abs(ms-mod(p.x,ms*2.));
+	p.z = abs(ms-mod(p.z,ms*2.))-ms/2.;
+	//     
+    //assdas
+
+	
+			
+	     
+         //asdasd  asdas
+    //p.x = mod(p.x, ms) - ms/2.;
+    //p.z = mod(p.z, ms) - ms/2.;
+    
+	float indexy2 = floor(p.y/ms*2.);
+	p.x = mod(p.x, ms) - ms/2.;
+	//p.y+=abs(sin(time+indexy2*8.)*0.05+0.05);
+//	p.y+=abs(sin(time+indexy2*8.)*0.05+0.05);
+    //p.z+=sin(id2*4+time);
+    //p.y = mod(p.y, ms*2.) - ms*2/2;
+    
+    
+    vec3 p3 = p;
+    float obj2 = obj2(p3); //Columna
+  //  p.xz*=rot(time*.1+id2*.1);
+    //p.xy*=rot(.4);
+	//p.xz*=rot(time*.1+id2*.1);
+   // p=abs(p);
+    //p -= sin(time)*.1+.51;
+   
+    vec3 p2 = p;
+    float ms2 = 1.0;
+    
+   // p2.y+=time2;
+   // p2.z+=time;
+    float id = floor(p2.y/ms2);
+    
+   
+    p2.y = mod(p2.y,ms2) -ms2/2.;
+//    p2.xz*=rot(time2*2.+id*1.);
+//	p2.xy*=rot(time2*2.+id*1.);
+	//p2.y = sin(p2.x*1.);
+    p2.x+=sin(time*.1+indexz*.5)*.3;
+
+	p2.xy*=rot(1.-hash6*2.);
+
+
+	vec3 siz=vec3(.1+noise(vec3(indexx,id,indexz)*.4+time*.1))*vec3(.2,.2,-.0);
+	float obj1 = length(max(vec3(0.),abs(p2)-siz*vec3(1.,1.,0.)-vec3(0.03,0.03,.00)));
+   
+
+   // obj1 = opSmoothIntersection(obj1,obj2,-0.8);
+    //p.z =sin(p.x*1);
+   //   obj1 = max(obj1, sphere(p2, sin(time)*.02+1.1));
+    // obtenemos la distancia minima entre obj1 y obj2 para combinarlas en la escena
+    float d = obj1;
+	obj2=length(max(vec3(0.),abs(p2)-siz*vec3(1.,1.,0.)-vec3(0,0,.006)));
+	d=min(d,obj2);
+      //    d = min(obj1, obj2);0
+     // d = obj2;
+    // coloreamos segun el objeto con el que choca el rayo
+
+	vec3 col1 = vec3(1.);
+	vec3 col2 = vec3(.5); 
+	 if (d == obj1) objcol = mix(col1,col2,sin(indexz*200.+time*.2));;
+
+	//vec3 col2 = vec3(0.5,1.0,0.9);
+
+	vec3 co=hsv2rgb(vec3(noise(vec3(indexx,id,indexz)*.5)+(length(p2)-smoothstep(.5,.6,noise(p2*(25.+hash4*25.)))*1.)*.5,.3,1.));
+    //co=mix(vec3(hash6,hash7,hash8),co,.5);
+	vec3 pr=sin(p2*(50.+hash3*50.))*(1.+siz*3.);
+	pr.xy*=rot(hash9);
+	co+=step(abs(pr.y),.2)*.2;
+	co+=step(abs(pr.x),.2)*.2;
+	
+	if (d == obj2) objcol = 1.3-co;
+	if (d == obj1) objcol= col1;
+    //if (d == obj1) objcol = mix(col1,col2,sin(id2*10.+time));;
+
+	d=max(-pp.z-13.,d);
+    return d*0.8;
+}
+
+ 
+
+
+
+
+
+
+
+// FUNCION NORMAL
+
+vec3 normal(vec3 p) 
+{   
+    vec2 d = vec2(0., det);
+    
+    return normalize(vec3(de(p + d.yxx), de(p + d.xyx), de(p + d.xxy)) - de(p));
+}
+
+// FUNCION SHADE
+
+vec3 shade(vec3 p, vec3 dir) {
+    
+    vec3 lightdir = normalize(vec3(1.5, .5, -1.5)); 
+    
+    // aquí definimos el color del objeto según la variable objcolor seteada en la funcion
+    // de distancia. La guardamos en col antes de llamar a la funcion normal
+    vec3 col = objcol;
+    
+    
+    vec3 n = normal(p);
+    
+    float diff = max(0.3, dot(lightdir, n))*.8;
+    
+    vec3 refl = reflect(dir, n);
+    
+    float spec = pow(max(0., dot(lightdir, refl)), 10.);
+    
+    float amb = .1;
+    
+    
+    
+
+    return (col*(amb + diff) + spec * .8)*1.;
+    
+}
+
+
+
+// FUNCION DE RAYMARCHING
+
+vec3 march(vec3 from, vec3 dir) 
+{
+
+    float d, td=0.;
+    vec3 p =vec3(0);
+    vec3 col = vec3(0);
+    float rr=hash(dir.x*100.+sin(dir.y*465.)*65.54);
+    for (int i=0; i<100; i++) 
+    {
+        p = from + td * dir;
+
+        d = de(p)*(1.+rr*.05);
+
+        if (d < det || td > maxdist) break;
+
+        td += d;
+    }
+
+    if (d < det)
+    {
+        p -= det * dir;
+        col = shade(p, dir);
+    }
+    else 
+    {
+        // para este background estoy ubicando la posición en el fondo de la escena
+        // from + distancia máxima * dirección del rayo
+        p = from + maxdist * dir;
+        // usamos esta posición para dibujar un fondo
+        // en este caso es un fondo simple usando la función sin
+       // col += vec3(.0);
+    }
+     float n=rnd(dir.x+sin(dir.y*10.)*10.+time);
+     col = mix(vec3(1.0)*vec3(1.,.95,.85)*mod(gl_FragCoord.y,3.)*.3,col, exp(-.003*td*td))-n*.1;
+     
+     
+    return col;    
+}
+
+// MAIN
+
+void main()
+{
+	
+    vec2 uv = gl_FragCoord.xy/resolution.xy - .5; 
+	float time2 = iTime*speed;
+    uv.x *= resolution.x / resolution.y; 
+   
+    vec3 from = vec3(0.5, 1., -15.);
+    vec3 dir = normalize(vec3(uv, 2.));
+	dir.xz*=rot(.3-hash7*.8);
+    //from.z+=time2*8.;
+    //from.x-=sin(time2);
+		 
+		     
+		   
+		  
+    vec3 col = march(from, dir);
+
+    gl_FragColor = vec4(col, 1.);
+}
+
+		</script>
+		
+		
+
+
+
+
+		<script id="fragmentShader" type="x-shader/x-fragment">
+
+			#ifdef GL_ES
+			precision mediump float;
+			#endif
+
+			uniform vec2 resolution;
+			uniform sampler2D texture;
+
+			void main() {
+
+				vec2 uv = gl_FragCoord.xy / resolution.xy;
+				gl_FragColor = texture2D( texture, uv );
+
+			}
+
+		</script>
+
+		<script id="vertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+
+			void main() {
+
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script id="surfaceVertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+			attribute vec2 surfacePosAttrib;
+			varying vec2 surfacePosition;
+
+			void main() {
+
+				surfacePosition = surfacePosAttrib;
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script>
+
+			if ( !window.requestAnimationFrame ) {
+
+				window.requestAnimationFrame = ( function() {
+
+					return window.webkitRequestAnimationFrame ||
+						window.mozRequestAnimationFrame ||
+						window.oRequestAnimationFrame ||
+						window.msRequestAnimationFrame ||
+						function ( callback, element ) {
+
+							window.setTimeout( callback, 1000 / 60 );
+
+						};
+
+				} )();
+
+			}
+
+			if (!Date.now) {
+				Date.now = function() {
+					return +new Date();
+				};
+			}
+
+
+			var quality = 1.;
+			var canvas, gl, buffer, currentProgram, vertexPosition, screenVertexPosition,
+			parameters = { startTime: Date.now(), time: 0, mouseX: 0.5, mouseY: 0.5, screenWidth: 0, screenHeight: 0, fxrand: fxrand() },
+			surface = { centerX: 0, centerY: 0, width: 1, height: 1, lastX: 0, lastY: 0 },
+			frontTarget, backTarget, screenProgram, getWebGL, resizer = {};
+
+			init();
+			if (gl) { animate(); }
+
+			function init() {
+
+				canvas = document.createElement( 'canvas' );
+				canvas.style.display = 'block';
+				document.body.appendChild( canvas );
+
+				// Initialise WebGL
+
+				try {
+
+					gl = canvas.getContext( 'experimental-webgl', { preserveDrawingBuffer: true } );
+
+				} catch( error ) { }
+
+				if ( !gl ) {
+
+					alert("WebGL not supported, but code will be shown.");
+
+				} else {
+
+					// Create vertex buffer (2 triangles)
+
+					buffer = gl.createBuffer();
+					gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [ - 1.0, - 1.0, 1.0, - 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0 ] ), gl.STATIC_DRAW );
+
+					// Create surface buffer (coordinates at screen corners)
+
+					surface.buffer = gl.createBuffer();
+				}
+
+
+				if (gl) {
+
+					var surfaceMouseDown = function ( event ) {
+
+
+						surface.lastX = event.clientX;
+						surface.lastY = event.clientY;
+						event.preventDefault();
+
+					};
+
+					var noContextMenu = function ( event ) {
+
+						event.preventDefault();
+
+					};
+
+					canvas.addEventListener( 'mousedown', surfaceMouseDown, false );
+
+					canvas.addEventListener( 'contextmenu', noContextMenu, false);
+				}
+
+				var clientXLast, clientYLast;
+
+				document.addEventListener( 'mousemove', function ( event ) {
+
+					var clientX = event.clientX;
+					var clientY = event.clientY;
+
+					if (clientXLast == clientX && clientYLast == clientY)
+						return;
+
+					clientXLast = clientX;
+					clientYLast = clientY;
+
+					parameters.mouseX = clientX / window.innerWidth;
+					parameters.mouseY = 1 - clientY / window.innerHeight;
+
+				}, false );
+
+				onWindowResize();
+				window.addEventListener( 'resize', onWindowResize, false );
+				compile();
+				compileScreenProgram();
+				parameters.startTime=Date.now();
+
+			}
+
+			function computeSurfaceCorners() {
+
+				if (gl) {
+
+					surface.width = surface.height * parameters.screenWidth / parameters.screenHeight;
+
+					var halfWidth = surface.width * 0.5, halfHeight = surface.height * 0.5;
+
+					gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [
+						surface.centerX - halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY + halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight ] ), gl.STATIC_DRAW );
+
+				}
+
+			}
+
+			function resetSurface() {
+
+				surface.centerX = surface.centerY = 0;
+				surface.height = 1;
+				computeSurfaceCorners();
+
+			}
+
+
+			function compile() {
+
+				var getSourceSynch = function(url) {
+					var req = new XMLHttpRequest();
+					req.open("GET", url, false);
+					req.send(null);
+					return req.responseText;
+				};
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'shader' ).textContent;
+				var vertex = document.getElementById( 'surfaceVertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				if ( vs == null || fs == null ) return null;
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				if ( currentProgram ) {
+
+					gl.deleteProgram( currentProgram );
+					setURL( fragment );
+
+				}
+
+				currentProgram = program;
+
+
+				// Cache uniforms
+
+				cacheUniformLocation( program, 'time' );
+				cacheUniformLocation( program, 'mouse' );
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'backbuffer' );
+				cacheUniformLocation( program, 'surfaceSize' );
+				cacheUniformLocation( program, 'fxrand' );
+
+				// Load program into GPU
+
+				gl.useProgram( currentProgram );
+
+				// Set up buffers
+
+				surface.positionAttribute = gl.getAttribLocation(currentProgram, "surfacePosAttrib");
+				gl.enableVertexAttribArray(surface.positionAttribute);
+
+				vertexPosition = gl.getAttribLocation(currentProgram, "position");
+				gl.enableVertexAttribArray( vertexPosition );
+
+				console.log(gl.getShaderInfoLog(fs));
+			}
+
+			function compileScreenProgram() {
+
+				if (!gl) { return; }
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'fragmentShader' ).textContent;
+				var vertex = document.getElementById( 'vertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				screenProgram = program;
+
+				gl.useProgram( screenProgram );
+
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'texture' );
+
+				screenVertexPosition = gl.getAttribLocation(screenProgram, "position");
+				gl.enableVertexAttribArray( screenVertexPosition );
+
+			}
+
+			function cacheUniformLocation( program, label ) {
+
+				if ( program.uniformsCache === undefined ) {
+
+					program.uniformsCache = {};
+
+				}
+
+				program.uniformsCache[ label ] = gl.getUniformLocation( program, label );
+
+			}
+
+			//
+
+			function createTarget( width, height ) {
+
+				var target = {};
+
+				target.framebuffer = gl.createFramebuffer();
+				target.renderbuffer = gl.createRenderbuffer();
+				target.texture = gl.createTexture();
+
+				// set up framebuffer
+
+				gl.bindTexture( gl.TEXTURE_2D, target.texture );
+				gl.texImage2D( gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST );
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, target.framebuffer );
+				gl.framebufferTexture2D( gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0 );
+
+				// set up renderbuffer
+
+				gl.bindRenderbuffer( gl.RENDERBUFFER, target.renderbuffer );
+
+				gl.renderbufferStorage( gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, width, height );
+				gl.framebufferRenderbuffer( gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, target.renderbuffer );
+
+				// clean up
+
+				gl.bindTexture( gl.TEXTURE_2D, null );
+				gl.bindRenderbuffer( gl.RENDERBUFFER, null );
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null);
+
+				return target;
+
+			}
+
+			function createRenderTargets() {
+
+				frontTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+				backTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+
+			}
+
+			//
+
+
+			function createShader( src, type ) {
+
+				var shader = gl.createShader( type );
+				gl.shaderSource( shader, src );
+				gl.compileShader( shader );
+				return shader;
+
+			}
+
+			//
+
+			function onWindowResize( event ) {
+
+				var isMaxWidth = ((resizer.currentWidth === resizer.maxWidth) || (resizer.currentWidth === resizer.minWidth)),
+					isMaxHeight = ((resizer.currentHeight === resizer.maxHeight) || (resizer.currentHeight === resizer.minHeight));
+
+
+				resizer.isResizing = false;
+				resizer.maxWidth = window.innerWidth - 75;
+				resizer.maxHeight = window.innerHeight - 125;
+				if (isMaxWidth || (resizer.currentWidth > resizer.maxWidth)) {
+					resizer.currentWidth = resizer.maxWidth;
+				}
+				if (isMaxHeight || (resizer.currentHeight > resizer.maxHeight)) {
+					resizer.currentHeight = resizer.maxHeight;
+				}
+				if (resizer.currentWidth < resizer.minWidth) { resizer.currentWidth = resizer.minWidth; }
+				if (resizer.currentHeight < resizer.minHeight) { resizer.currentHeight = resizer.minHeight; }
+
+				canvas.width = window.innerWidth / quality;
+				canvas.height = window.innerHeight / quality;
+
+				canvas.style.width = window.innerWidth + 'px';
+				canvas.style.height = window.innerHeight + 'px';
+
+				parameters.screenWidth = canvas.width;
+				parameters.screenHeight = canvas.height;
+
+				computeSurfaceCorners();
+
+				if (gl) {
+
+					gl.viewport( 0, 0, canvas.width, canvas.height );
+
+					createRenderTargets();
+
+				}
+			}
+
+			//
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				render();
+
+			}
+
+			function render() {
+
+				if ( !currentProgram ) return;
+
+				parameters.time = Date.now() - parameters.startTime;
+
+				// Set uniforms for custom shader
+
+				gl.useProgram( currentProgram );
+
+				gl.uniform1f( currentProgram.uniformsCache[ 'time' ], parameters.time / 1000 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'mouse' ], parameters.mouseX, parameters.mouseY );
+				gl.uniform1f( currentProgram.uniformsCache[ 'fxrand' ], parameters.fxrand );
+				gl.uniform2f( currentProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( currentProgram.uniformsCache[ 'backbuffer' ], 0 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'surfaceSize' ], surface.width, surface.height );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+				gl.vertexAttribPointer( surface.positionAttribute, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( vertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE0 );
+				gl.bindTexture( gl.TEXTURE_2D, backTarget.texture );
+
+				// Render custom shader to front buffer
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, frontTarget.framebuffer );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Set uniforms for screen shader
+
+				gl.useProgram( screenProgram );
+
+				gl.uniform2f( screenProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( screenProgram.uniformsCache[ 'texture' ], 1 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( screenVertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE1 );
+				gl.bindTexture( gl.TEXTURE_2D, frontTarget.texture );
+
+				// Render front buffer to screen
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Swap buffers
+
+				var tmp = frontTarget;
+				frontTarget = backTarget;
+				backTarget = tmp;
+
+			}
+
+		</script>
+</body></html>

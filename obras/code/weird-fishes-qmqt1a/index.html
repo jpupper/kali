@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+	<script id="fxhash-snippet">
+      let alphabet = "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+      var fxhash = 'onvVXjBiv1zYVGnkTDvUtfhwHMg8Hv89dkE5xqvR7HC2qz7CEkd'
+      let b58dec = (str) => str.split('').reduce((p,c,i) => p + alphabet.indexOf(c) * (Math.pow(alphabet.length, str.length-i-1)), 0)
+      let fxhashTrunc = fxhash.slice(2)
+      let regex = new RegExp(".{" + ((fxhash.length/4)|0) + "}", 'g')
+      let hashes = fxhashTrunc.match(regex).map(h => b58dec(h))
+      let sfc32 = (a, b, c, d) => {
+        return () => {
+          a |= 0; b |= 0; c |= 0; d |= 0
+          var t = (a + b | 0) + d | 0
+          d = d + 1 | 0
+          a = b ^ b >>> 9
+          b = c + (c << 3) | 0
+          c = c << 21 | c >>> 11
+          c = c + t | 0
+          return (t >>> 0) / 4294967296
+        }
+      }
+      var fxrand = sfc32(...hashes)
+</script>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+		<title>WebGL Test</title>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+		<style>
+
+			body {
+
+				background-color: #000000;
+				margin: 0;
+				padding: 0;
+				overflow: hidden;
+				border: 0;
+				width:100%;
+				height:100%;
+
+			}
+
+
+		</style>
+	</head>
+	<body style="cursor: default;">
+
+
+
+
+		
+
+		<script id="shader" type="x-shader/x-fragment">
+
+
+#ifdef GL_ES
+	precision mediump float;
+#endif
+
+uniform float time;
+uniform vec2 mouse;
+uniform float mousedown;
+uniform vec2 resolution;
+uniform float fxhash;
+
+#define iResolution resolution
+#define iMouse mouse
+#define iTime time
+
+// shadertoy begin ----------------------------------------------------
+
+#define eyes_size hash(fxhash+.1)
+#define body_width hash(fxhash+.2)
+#define body_height hash(fxhash+.3)
+#define tail_size hash(fxhash+.4)
+#define mouth_size hash(fxhash+.5)
+#define mouth_position hash(fxhash+.55)
+#define finn_size hash(fxhash+.6)
+#define col_fish_1 hsv2rgb(vec3(hash(fxhash+.7),.7,1.))
+#define col_fish_2 hsv2rgb(vec3(hash(fxhash+.7)-.2,.5,1.))
+
+// GLOBALS
+
+// position & direction
+vec3 pos_finn, pos_eyes;
+vec3 dir_eye;
+mat3 dir_mouth;
+vec3 dir_light;
+
+// coloring and animation
+float heye, weye, beye;
+float hmouth, cmouth;
+float hfinns, htail;
+float puff;
+float tim;
+float tim_tail;
+float ani_tail, ani_mouth;
+
+// colors
+vec3 col_water = vec3(.3, .7, 1.);
+//vec3 col_fish_1 = vec3(1., 0.4, 0.2);
+//vec3 col_fish_2 = vec3(1., 0.8, 0.5);
+vec3 col_eyes = vec3(0.7, 0.75, 1.);
+float t = 20.;
+
+// marching
+float maxdist = 5.;
+float det = .001;
+
+
+
+
+// USEFUL LITTLE FUNCTIONS
+
+float hash(float p)
+{
+    p*=1234.5678;
+    p = fract(p * .1031);
+    p *= p + 33.33;
+    return fract(2.*p*p);
+}
+
+
+vec3 hsv2rgb(vec3 c)
+{
+    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+
+// 2D rotation
+mat2 rot2D(float a) {
+  a = radians(a);
+  float s = sin(a);
+  float c = cos(a);
+  return mat2(c, s, -s, c);
+}
+
+// Align vector
+mat3 lookat(vec3 fw, vec3 up) {
+  fw = normalize(fw);
+  vec3 rt = normalize(cross(fw, normalize(up)));
+  return mat3(rt, cross(rt, fw), fw);
+}
+
+
+// Tile fold 
+float fmod(float p, float c) { return abs(c - mod(p, c * 2.)) / c; }
+
+// Smooth min
+float smin(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// Smooth max
+float smax(float a, float b, float k) {
+  float h = clamp(0.5 + 0.5 * (a - b) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// Torus
+float sdTorus(vec3 p, vec2 t, vec3 s) {
+  p = p.yxz * s;
+  vec2 q = vec2(length(p.xz) - t.x, p.y);
+  return length(q) - t.y;
+}
+
+
+// PUFFY'S SURFACE DISPLACEMENT FUNCTIONS
+
+float thorns(vec3 p) {
+  p.xz*=rot2D(-25.);
+  float s1 = smoothstep(.0, .7, -p.x + p.z + .6);
+  float s2 = smoothstep(.15, .3, length(p.xy)) * smoothstep(.0, .3, length(p.yz));
+  float s3 = smoothstep(.0, .25, abs(p.y));
+  p.x = fmod(atan(p.x, p.y), .31459 / 2.);
+  p.y = fmod(atan(p.y, p.z), .31459 / 2.);
+  p.xz*=rot2D(25.);
+  return min(1., exp((-3. - puff*3.) * length(p.xy))) * s1 * s2 * s3;
+}
+
+float spiral(vec3 p, vec3 c) {
+  p.y = abs(p.y);
+  vec3 pos = p;
+  p = lookat(c, vec3(0., 1., 0.)) * p;
+  float a = length(p.xy) * (10.+mouth_size*40.);
+  p.yx *= mat2(sin(a), cos(a), -cos(a), sin(a));
+  float s=pow(abs(p.x), 2.) * smoothstep(0.7, 1., max(0., 1. - length(p.xy)));
+  return s*smoothstep(0.,.05,pos.z+.1);
+}
+
+float skin(vec3 pos) {
+  pos *= 2.;
+  vec3 p = pos;
+  float m = 1000.;
+  for (int i = 0; i < 7; i++) {
+    p = abs(p) / dot(p, p) - .5;
+    m = min(m, length(p));
+  }
+  return max(0., 1. - m) * (.1 + smoothstep(-pos.x + 1., 0., .4)) * .003;
+}
+
+// PUFFY'S DE FUNCTIONS
+
+// Body parts
+
+float finn(vec3 p) {
+  p.z += .27;
+  p.z*=.5+finn_size;
+  p.x += .1;
+  p.x *= 1.-pow(smoothstep(0., .2, -p.z),1.5)*.3;
+  mat2 ro = rot2D(cos(tim_tail*4.+(p.x+p.z)*5.) *(3.-p.x*20.));   
+  p.xy *= ro;
+  p.zy *= ro;
+  float e = atan(p.x, p.z);
+  float o = sin(e * 20.) * .003;
+  float a = .19 - p.z * .15;
+  float d = max(abs(p.y + o) - .005, length(p.xz) - a + cos(o * 500.) * .02);
+  d = max(p.x - p.z*.6, d);
+  d = max(p.z-p.x*.3, d);
+  return d * .75;
+}
+
+
+float tail(vec3 p) {
+  p.z*=.7+tail_size;
+  p.z += .18;
+  p.x += puff * .1;
+  p.x += .45 + pow(smoothstep(0., .4, abs(p.z)), 5.) * .1;
+  p.xy *= rot2D(cos(tim_tail + p.x * 5. + p.z * 3.) * 25.);
+  float e = atan(p.x, p.z);
+  float o = sin(e * 20.) * .003;
+  float a = .27 - p.z * .15;
+  float d = max(abs(p.y + o) - .003, length(p.xz) - a + cos(o * 500.) * .02);
+  float d1 = smax(p.x - p.z * .2, d, .02);
+  d1 = smax(-p.x * .4 + p.z, d1, .02);
+  float d2 = smax(p.x + p.z * .3, d, .02);
+  d2 = smax(-p.x * .3 - p.z, d2, .02);
+  d = smin(d1, d2, .03);
+  return d * .7;
+}
+
+float finns(vec3 p) {
+  float amp = (1. - puff * .3) * .15;
+  float t = tim*5. + sign(p.y) * .2;
+  float l = length(p) * 2.;
+  p.y = abs(p.y);
+  p += normalize(pos_finn) * (.28 + puff * .05 + body_width*.1);
+  p*=1.3;
+  p = lookat(normalize(vec3(-1., -.0, -5.)), vec3(0., 1., 0.)) * p;
+  amp *= (1. + length(p) * 5.);
+  float a = .2 + cos(t + atan(p.y, p.z) * 2.) * amp * .5;
+  float b = 1.2 + puff *1.5 + sin(t - amp) * amp;
+  p.zx *= mat2(sin(a), cos(a), -cos(a), sin(a));
+  p.yx *= mat2(sin(b), cos(b), -cos(b), sin(b));
+  float e = atan(p.y, p.z);
+  float o = sin(e * 20.) * .003;
+  float r = .45 - smoothstep(1., 3., abs(e)) * .25;
+  float d =
+      max(abs(p.x + o) - .005, length(p.yz) - r + cos(p.z * 100.) * .01) * .9;
+  d = max(-p.y - p.z * .5, d);
+  d = max(p.z + p.y * .2, d);
+  d = smin(d, length(p) - .04, .04);
+  return d * .8;
+}
+
+float mouth(vec3 p) {
+  p *= 1.3 - mouth_size * .8;
+  p *= dir_mouth;
+  float mo = length(p.yz * vec2(.35 + ani_mouth * .1-p.z*2., 1.)) - .02 * (1. + ani_mouth * .4);
+  return max(-p.x, mo);
+}
+
+float body(vec3 p) {
+  float m = smoothstep(0., 1.5, -p.x + 1.3) * .2;
+  float s = smoothstep(0., 1.7, -p.x);
+  p.z -= puff * .1;
+  p.z -= smoothstep(0., p.z*.3 + p.x - .6 + ani_mouth * .1,-.1)*.05;
+  p.y *= 1.15 + pow(abs(p.z - .2), 2.) * 1.5 - body_width * .5;
+  p.z *= 1.1 - (p.x + .1) * .1 - body_height*.3;
+  p.zy *= 1.+smoothstep(0.,.5,-p.x)*.3;
+  float d = length(p*vec3(1.+smoothstep(0.,.5,-p.x+p.z)*.5,1.,1.4)) - .47 - s-puff*.12;
+  p += vec3(.14 + puff * .0, .0, .2);
+  p.x -= p.z*.5;
+  p.z += puff * .1;
+  d = smin(d, length(p * vec3(0.6, 1.2, 1.7)) - .55 + m, .2) + .1;
+  d+=smoothstep(0.,.7,-p.x)*.05;
+  return (d+.05) * .7;
+}
+
+float eye(vec3 p) {
+	float d = length(p) - .08 - eyes_size * .05 - body_width * .03;
+    return d;
+}
+
+// Main DE function
+float de(vec3 p) {
+  beye = 0.;
+  heye = 0.;
+  weye = step(0., p.y);
+  hmouth = 0.;
+  hfinns = 0.;
+  htail = 0.;
+  p.y *= 1.15;
+  vec3 rp = p;
+  p.y = abs(p.y);
+  mat2 rotbod=rot2D(smoothstep(0., 1.3, -p.x + .2) * ani_tail * 25.);
+  rp.xy *= rotbod;
+  rp.zy *= rotbod;
+  float t = tim * 10.;
+  p += sin(p * 20. + t) * .002;
+  float fi = finn(rp);
+  float fis = finns(rp);
+  float ta = tail(rp);
+  float mo = mouth(p);
+  float sk = skin(rp);
+  float res = (body(rp) - thorns(rp) * (.01 + puff * .1)) * .8 - sk;
+  res += spiral(rp, -pos_eyes + vec3(0.1, 1., -0.3))*.4;
+  rp.y = abs(rp.y) ;
+  float eyeh = eye(rp + pos_eyes * .9);
+  float eyes = eye(rp + pos_eyes);
+  res = smax(res, -mo, .013);
+  res = smin(res, eyes, .02);
+  res = smin(res, eyeh, .035);
+  res = smin(res, fis, .02);
+  res = smin(res, fi, .02);
+  res = smin(res, ta, .03);
+  beye = abs(res - eyes);
+  heye = 1.-step(.005, beye);
+  hfinns = 1.-step(.005,abs(res-fi));
+  hfinns = max(hfinns,1.-step(.005,abs(res-fis)));
+  htail = 1.-step(.02, abs(res-ta));
+  hmouth = 1.-step(.01, abs(res-mo));
+  return res;
+}
+
+// PUFFY'S COLORING FUNCTIONS
+
+vec3 color_eyes(vec3 p, vec3 n) {
+  p*=1.7-eyes_size;
+  vec3 p1 = p + pos_eyes;
+  vec3 p2 = p + vec3(pos_eyes.x, -pos_eyes.y, pos_eyes.z);
+  vec3 l = p1;
+  vec3 c = col_fish_1;
+  p1 = lookat(dir_eye, vec3(0., 1., .5)) * p1;
+  p2 = lookat(dir_eye, vec3(0., 1., -.5)) * p2;
+  p1.y -= .01;
+  p2.y += .01;
+  c -= smoothstep(.07, .085, length(p1.xy) + 1. - weye) * (.4 + col_eyes * 1.5);
+  c -= smoothstep(.07, .085, length(p2.xy) + weye) * (.4 + col_eyes * 1.5);
+  c *= smoothstep(.03 + sin(atan(p1.x, p1.y) * 25.) * .02, .07, length(p1.xy) + 1. - weye);
+  c *= smoothstep(.03 + sin(atan(p2.x, p2.y) * 25.) * .02, .07, length(p2.xy) + weye);
+  return mix(c, -col_fish_1 - .2, smoothstep(.0, .0055, beye));
+}
+
+vec3 color(vec3 p, vec3 n) {
+  float c=.1+max(0.,p.x*3.);
+  float th=pow(max(0.,.2-abs(thorns(p)))/.2,3.);
+  vec3 col = mix(col_fish_1, col_fish_2, c);
+  col=mix(col_fish_1, col, .3+th*.7);
+  if (heye > 0.)
+    col = color_eyes(p, n);
+  if (hmouth > 0.)
+    col = col_fish_2 - .03;
+  if (hfinns > 0.)
+    col = mix(col_fish_1, col_fish_2 + .15,
+              smoothstep(.37, .5, length(p+vec3(0.,0.,.05)) - puff * .05));
+  if (htail > 0.)
+    col = mix(col_fish_1, col_fish_2 + .2,
+              smoothstep(.6, .75, length(p) - puff * .1));
+  return abs(col);
+}
+
+// BACKGROUND AND FOREGROUND FRACTAL
+
+float fractal(vec3 p) {
+  p += cos(p.z * 3. + tim * 4.) * .02;
+  float depth = smoothstep(0., 6., -p.z + 5.);
+  p *= .3;
+  p = abs(2. - mod(p + vec3(0.4, 0.7, tim * .07), 4.));
+  float ls = 0.;
+  float c = 0.;
+  for (int i = 0; i < 6; i++) {
+    p = abs(p) / min(dot(p, p), 1.) - .9;
+    float l = length(p);
+    c += abs(l - ls);
+    ls = l;
+  }
+  return .15 + smoothstep(0., 50., c) * depth * 4.;
+}
+
+// NORMALS AND LIGHTING
+
+vec3 normal(vec3 p) {
+  vec3 e = vec3(0.0, det * 2., 0.0);
+
+  return normalize(vec3(de(p + e.yxx) - de(p - e.yxx),
+                        de(p + e.xyx) - de(p - e.xyx),
+                        de(p + e.xxy) - de(p - e.xxy)));
+}
+
+float shadow(vec3 pos) {
+  float sh = 1.0;
+  float totdist = det * 30.;
+  float d = 10.;
+  for (int i = 0; i < 8; i++) {
+    if (d > det) {
+      vec3 p = pos - totdist * dir_light;
+      d = de(p);
+      sh = min(sh, 20. * d / totdist);
+      totdist += d;
+    }
+  }
+  return clamp(sh, 0.0, 1.0);
+}
+
+float light(vec3 p, vec3 dir, vec3 n, float shw) {
+  float dif = pow(max(0., dot(dir_light, -n)), 3.);
+  float amb = pow(max(0., dot(dir, -n)), 3.);
+  return dif * .7 * shw + amb * .2 + .15;
+}
+
+// RAY MARCHING AND SHADING
+
+vec3 march(vec3 from, vec3 dir) {
+  vec3 odir = dir;
+  vec3 p = from + dir * 2.;
+  float fg = fractal(p + dir) * .55;
+  vec3 col = vec3(0.);
+  float totdist = 0.;
+  float d;
+  float v = 0.;
+  cmouth = 1.;
+  for (int i = 0; i < 80; i++) {
+    p = from + totdist * dir;
+    d = de(p);
+    if (d < det || totdist > maxdist)
+      break;
+    totdist += d;
+    v += max(0., .1 - d) / .1;
+  }
+  float fade = smoothstep(maxdist * .2, maxdist * .9, maxdist - totdist);
+  float ref = 1.;
+  float eyes_ref = heye;
+  float shw = 1.;
+  if (d < det * 2.) {
+    p -= (det - d) * dir;
+    vec3 n = normal(p);
+    col = color(p, n) * (.1 + .9 * cmouth);
+    shw = shadow(p);
+    col *= light(p, dir, n, shw);
+    from = p - det * dir * 3.;
+    dir = reflect(dir, n);
+    ref = fade * (.3 * cmouth + eyes_ref * .2);
+    col = mix(col_water * .15, col, fade);
+  }
+  col *= normalize(col_water + 1.5) * 1.7;
+  p = maxdist * dir;
+  vec3 bk = fractal(p) * ref * col_water;
+  float glow = pow(max(0., dot(dir, -dir_light)), 1.5+eyes_ref*1.5);
+  vec3 glow_water = normalize(col_water+1.);
+  bk += glow_water*(glow*(1.-eyes_ref*.7) + pow(glow, 8.) * 1.5) * shw * cmouth * ref;
+  col += v * .06 * glow * ref * glow_water;
+  col += bk + fg * col_water;
+  return col;
+}
+
+// MAIN
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    
+  // Set globals
+  tim = mod(iTime, 600.);
+  ani_mouth = sin(tim * 6.);
+  puff = -.03;
+  pos_finn = normalize(vec3(0.35, -1, 0.));
+  pos_eyes = vec3(-1., -1.1-body_width*.7, 1.) * .12;
+  //pos_eyes*=1.+vec3(-1.,1.,0.)*puff*.05;
+  dir_light = normalize(vec3(-.3, 0.2, 1.));
+  dir_mouth = lookat(normalize(vec3(-.2-puff*.1+ani_mouth*.03+(mouth_position-.5), 0., -1.)), vec3(0., 1., 0.));
+  tim_tail = tim * 2.;
+  ani_tail = cos(tim_tail);
+
+  // Pixel coordinates
+  vec2 uv = fragCoord / iResolution.xy - .5;
+  vec2 uv2 = uv;
+  float ar = iResolution.x / iResolution.y; 
+  uv.x *= ar;
+
+  // Camera
+  vec2 mous = (iMouse.xy) * 4. * mousedown;
+  mous.x-=2.*mousedown;
+  float tcam = (tim+67.)*.05;
+  float zcam = smoothstep(.7, 1., cos(tcam)) * 1.8 - .3;
+  zcam -= smoothstep(.7, 1., -cos(tcam)) * 1.6;
+  mous += vec2(sin(tim * .15)*ar, 0.) * (1.-mousedown);
+  vec3 dir = normalize(vec3(uv, .9));
+  vec3 from = vec3(1., 0.1, -.7+mous.y*.2) * 1.25;
+  from.xy *= rot2D(mous.x * 40.);
+  dir = lookat(normalize(-from+vec3(sin(tim*.5)*.3,cos(tim*.25)*.1,0.)), vec3(0., 0., -1.)) * dir;
+
+  // Eyes direction
+  dir_eye = normalize(from);
+  //dir_eye.x = max(dir_eye.x, pos_eyes.x - .5);
+  dir_eye.y = min(abs(dir_eye.y), pos_eyes.y*sign(dir_eye.y)+.5*sign(dir_eye.y));
+  dir_eye.z = min(dir_eye.z, pos_eyes.z - .5);
+
+  // March and color
+  vec3 col = march(from, dir);
+  col *= vec3(1.1, .9, .8);
+  col += dot(uv2, uv2) * vec3(0., 0.6, 1.) * .8;
+
+  // Output to screen
+  fragColor = vec4(col, 1.);
+}
+
+// shadertoy end --------------------------------------------------------
+
+
+
+void main() {
+    vec4 color = vec4(0.);
+    mainImage(color,gl_FragCoord.xy);
+    gl_FragColor = color;
+}
+
+		</script>
+		
+		
+
+
+
+
+		<script id="fragmentShader" type="x-shader/x-fragment">
+
+			#ifdef GL_ES
+			precision mediump float;
+			#endif
+
+			uniform vec2 resolution;
+			uniform sampler2D texture;
+
+			void main() {
+
+				vec2 uv = gl_FragCoord.xy / resolution.xy;
+				gl_FragColor = texture2D( texture, uv );
+
+			}
+
+		</script>
+
+		<script id="vertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+
+			void main() {
+
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script id="surfaceVertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+			attribute vec2 surfacePosAttrib;
+			varying vec2 surfacePosition;
+
+			void main() {
+
+				surfacePosition = surfacePosAttrib;
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script>
+
+			if ( !window.requestAnimationFrame ) {
+
+				window.requestAnimationFrame = ( function() {
+
+					return window.webkitRequestAnimationFrame ||
+						window.mozRequestAnimationFrame ||
+						window.oRequestAnimationFrame ||
+						window.msRequestAnimationFrame ||
+						function ( callback, element ) {
+
+							window.setTimeout( callback, 1000 / 60 );
+
+						};
+
+				} )();
+
+			}
+
+			if (!Date.now) {
+				Date.now = function() {
+					return +new Date();
+				};
+			}
+
+
+			var quality = 1.;
+			var canvas, gl, buffer, currentProgram, vertexPosition, screenVertexPosition,
+			parameters = { startTime: Date.now(), time: 0, mouseX: 0.5, mouseY: 0.5, mousedown: 0, screenWidth: 0, screenHeight: 0, fxhash: fxrand() },
+			surface = { centerX: 0, centerY: 0, width: 1, height: 1, lastX: 0, lastY: 0 },
+			frontTarget, backTarget, screenProgram, getWebGL, resizer = {};
+
+			init();
+			if (gl) { animate(); }
+
+			function init() {
+
+				canvas = document.createElement( 'canvas' );
+				canvas.style.display = 'block';
+				document.body.appendChild( canvas );
+
+				// Initialise WebGL
+
+				try {
+
+					gl = canvas.getContext( 'experimental-webgl', { preserveDrawingBuffer: true } );
+
+				} catch( error ) { }
+
+				if ( !gl ) {
+
+					alert("WebGL not supported, but code will be shown.");
+
+				} else {
+
+					// Create vertex buffer (2 triangles)
+
+					buffer = gl.createBuffer();
+					gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [ - 1.0, - 1.0, 1.0, - 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0 ] ), gl.STATIC_DRAW );
+
+					// Create surface buffer (coordinates at screen corners)
+
+					surface.buffer = gl.createBuffer();
+				}
+
+
+				if (gl) {
+
+					var surfaceMouseDown = function ( event ) {
+
+
+						parameters.mousedown = 1;
+//						event.preventDefault();
+
+					};
+
+					var surfaceMouseUp = function ( event ) {
+
+
+						parameters.mousedown = 0;
+					//						event.preventDefault();
+
+					};
+
+
+					var noContextMenu = function ( event ) {
+
+						event.preventDefault();
+
+					};
+
+					canvas.addEventListener( 'mousedown', surfaceMouseDown, false );
+					canvas.addEventListener( 'mouseup', surfaceMouseUp, false );
+
+					canvas.addEventListener( 'contextmenu', noContextMenu, false);
+				}
+
+				var clientXLast, clientYLast;
+
+				document.addEventListener( 'mousemove', function ( event ) {
+
+					var clientX = event.clientX;
+					var clientY = event.clientY;
+
+					if (clientXLast == clientX && clientYLast == clientY)
+						return;
+
+					clientXLast = clientX;
+					clientYLast = clientY;
+
+					parameters.mouseX = clientX / window.innerWidth;
+					parameters.mouseY = 1 - clientY / window.innerHeight;
+
+				}, false );
+
+				onWindowResize();
+				window.addEventListener( 'resize', onWindowResize, false );
+				compile();
+				compileScreenProgram();
+				parameters.startTime=Date.now();
+
+			}
+
+			function computeSurfaceCorners() {
+
+				if (gl) {
+
+					surface.width = surface.height * parameters.screenWidth / parameters.screenHeight;
+
+					var halfWidth = surface.width * 0.5, halfHeight = surface.height * 0.5;
+
+					gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [
+						surface.centerX - halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY + halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight ] ), gl.STATIC_DRAW );
+
+				}
+
+			}
+
+			function resetSurface() {
+
+				surface.centerX = surface.centerY = 0;
+				surface.height = 1;
+				computeSurfaceCorners();
+
+			}
+
+
+			function compile() {
+
+				var getSourceSynch = function(url) {
+					var req = new XMLHttpRequest();
+					req.open("GET", url, false);
+					req.send(null);
+					return req.responseText;
+				};
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'shader' ).textContent;
+				var vertex = document.getElementById( 'surfaceVertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				if ( vs == null || fs == null ) return null;
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				if ( currentProgram ) {
+
+					gl.deleteProgram( currentProgram );
+					setURL( fragment );
+
+				}
+
+				currentProgram = program;
+
+
+				// Cache uniforms
+
+				cacheUniformLocation( program, 'time' );
+				cacheUniformLocation( program, 'mouse' );
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'backbuffer' );
+				cacheUniformLocation( program, 'surfaceSize' );
+				cacheUniformLocation( program, 'fxhash' );
+				cacheUniformLocation( program, 'mousedown' );
+
+				// Load program into GPU
+
+				gl.useProgram( currentProgram );
+
+				// Set up buffers
+
+				surface.positionAttribute = gl.getAttribLocation(currentProgram, "surfacePosAttrib");
+				gl.enableVertexAttribArray(surface.positionAttribute);
+
+				vertexPosition = gl.getAttribLocation(currentProgram, "position");
+				gl.enableVertexAttribArray( vertexPosition );
+
+				console.log(gl.getShaderInfoLog(fs));
+			}
+
+			function compileScreenProgram() {
+
+				if (!gl) { return; }
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'fragmentShader' ).textContent;
+				var vertex = document.getElementById( 'vertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				screenProgram = program;
+
+				gl.useProgram( screenProgram );
+
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'texture' );
+
+				screenVertexPosition = gl.getAttribLocation(screenProgram, "position");
+				gl.enableVertexAttribArray( screenVertexPosition );
+
+			}
+
+			function cacheUniformLocation( program, label ) {
+
+				if ( program.uniformsCache === undefined ) {
+
+					program.uniformsCache = {};
+
+				}
+
+				program.uniformsCache[ label ] = gl.getUniformLocation( program, label );
+
+			}
+
+			//
+
+			function createTarget( width, height ) {
+
+				var target = {};
+
+				target.framebuffer = gl.createFramebuffer();
+				target.renderbuffer = gl.createRenderbuffer();
+				target.texture = gl.createTexture();
+
+				// set up framebuffer
+
+				gl.bindTexture( gl.TEXTURE_2D, target.texture );
+				gl.texImage2D( gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST );
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, target.framebuffer );
+				gl.framebufferTexture2D( gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0 );
+
+				// set up renderbuffer
+
+				gl.bindRenderbuffer( gl.RENDERBUFFER, target.renderbuffer );
+
+				gl.renderbufferStorage( gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, width, height );
+				gl.framebufferRenderbuffer( gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, target.renderbuffer );
+
+				// clean up
+
+				gl.bindTexture( gl.TEXTURE_2D, null );
+				gl.bindRenderbuffer( gl.RENDERBUFFER, null );
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null);
+
+				return target;
+
+			}
+
+			function createRenderTargets() {
+
+				frontTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+				backTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+
+			}
+
+			//
+
+
+			function createShader( src, type ) {
+
+				var shader = gl.createShader( type );
+				gl.shaderSource( shader, src );
+				gl.compileShader( shader );
+				return shader;
+
+			}
+
+			//
+
+			function onWindowResize( event ) {
+
+				var isMaxWidth = ((resizer.currentWidth === resizer.maxWidth) || (resizer.currentWidth === resizer.minWidth)),
+					isMaxHeight = ((resizer.currentHeight === resizer.maxHeight) || (resizer.currentHeight === resizer.minHeight));
+
+
+				resizer.isResizing = false;
+				resizer.maxWidth = window.innerWidth - 75;
+				resizer.maxHeight = window.innerHeight - 125;
+				if (isMaxWidth || (resizer.currentWidth > resizer.maxWidth)) {
+					resizer.currentWidth = resizer.maxWidth;
+				}
+				if (isMaxHeight || (resizer.currentHeight > resizer.maxHeight)) {
+					resizer.currentHeight = resizer.maxHeight;
+				}
+				if (resizer.currentWidth < resizer.minWidth) { resizer.currentWidth = resizer.minWidth; }
+				if (resizer.currentHeight < resizer.minHeight) { resizer.currentHeight = resizer.minHeight; }
+
+				canvas.width = window.innerWidth / quality;
+				canvas.height = window.innerHeight / quality;
+
+				canvas.style.width = window.innerWidth + 'px';
+				canvas.style.height = window.innerHeight + 'px';
+
+				parameters.screenWidth = canvas.width;
+				parameters.screenHeight = canvas.height;
+
+				computeSurfaceCorners();
+
+				if (gl) {
+
+					gl.viewport( 0, 0, canvas.width, canvas.height );
+
+					createRenderTargets();
+
+				}
+			}
+
+			//
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				render();
+
+			}
+
+			function render() {
+
+				if ( !currentProgram ) return;
+
+				parameters.time = Date.now() - parameters.startTime;
+
+				// Set uniforms for custom shader
+
+				gl.useProgram( currentProgram );
+
+				gl.uniform1f( currentProgram.uniformsCache[ 'time' ], parameters.time / 1000 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'mouse' ], parameters.mouseX, parameters.mouseY );
+				gl.uniform1f( currentProgram.uniformsCache[ 'mousedown' ], parameters.mousedown);
+				gl.uniform1f( currentProgram.uniformsCache[ 'fxhash' ], parameters.fxhash );
+				gl.uniform2f( currentProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( currentProgram.uniformsCache[ 'backbuffer' ], 0 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'surfaceSize' ], surface.width, surface.height );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+				gl.vertexAttribPointer( surface.positionAttribute, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( vertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE0 );
+				gl.bindTexture( gl.TEXTURE_2D, backTarget.texture );
+
+				// Render custom shader to front buffer
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, frontTarget.framebuffer );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Set uniforms for screen shader
+
+				gl.useProgram( screenProgram );
+
+				gl.uniform2f( screenProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( screenProgram.uniformsCache[ 'texture' ], 1 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( screenVertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE1 );
+				gl.bindTexture( gl.TEXTURE_2D, frontTarget.texture );
+
+				// Render front buffer to screen
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Swap buffers
+
+				var tmp = frontTarget;
+				frontTarget = backTarget;
+				backTarget = tmp;
+
+			}
+
+		</script>
+</body></html>

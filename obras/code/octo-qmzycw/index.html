@@ -1,0 +1,855 @@
+<!DOCTYPE html><html><head>
+    
+  
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+		<title>WebGL Test</title>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+		<style>
+
+			body {
+
+				background-color: #000000;
+				margin: 0;
+				padding: 0;
+				overflow: hidden;
+				border: 0;
+				width:100%;
+				height:100%;
+
+			}
+
+
+		</style>
+	</head>
+	<body style="cursor: default;">
+
+
+
+
+		<!-- ACA VA EL CODIGO DEL SHADER, MANTENER LOS UNIFORMS time, mouse, resolution -->
+
+		<script id="shader" type="x-shader/x-fragment">
+
+
+#ifdef GL_ES
+	precision mediump float;
+#endif
+
+uniform float time;
+uniform vec2 mouse;
+uniform vec2 resolution;
+
+#define iResolution resolution
+#define iMouse mouse
+#define iTime time
+
+// shadertoy begin ----------------------------------------------------
+
+vec3 colwater = vec3(.3, .7, 1.), ldir;
+float specular = 1.2;
+
+float det=.002;
+float md=50.;
+float coley=0.,eyered=0.,colmo=0.,colpup=0.,colgrad=0.;
+float k=0.;
+vec2 mous;
+vec3 pp;
+vec3 camdir;
+
+vec3 coltop=vec3(.29,.18,.37);
+vec3 colbot=vec3(.8,1.,.0);
+vec3 coleye1=vec3(1.,1.,.9);
+vec3 coleye2=vec3(1.,.6,.6);
+
+#define t iTime*1.5
+
+mat2 rot(float a) {
+	float s=sin(a), c=cos(a);
+    return mat2(c,s,-s,c);
+}
+
+float smin( float a, float b, float k )
+{
+    float h = clamp( 0.5+0.5*(b-a)/k, 0.0, 1.0 );
+    return mix( b, a, h ) - k*h*(1.0-h);
+}
+
+float ssub( float d1, float d2, float k ) {
+    float h = clamp( 0.5 - 0.5*(d2+d1)/k, 0.0, 1.0 );
+    return mix( d2, -d1, h ) + k*h*(1.0-h); }
+
+
+float water(vec3 p) {
+  float ti=t/1.5;
+  p += cos(p.z * 3. + ti * 4.) * .02;
+  float depth = smoothstep(0., 6., p.y + 3.);
+  p *= .3;
+  p = abs(2. - mod(p + vec3(0.4, 0.7, ti * .07), 4.));
+  float ls = 0.;
+  float c = 0.;
+  for (int i = 0; i < 6; i++) {
+    p = abs(p) / min(dot(p, p), 1.) - .9;
+    float l = length(p);
+    c += abs(l - ls);
+    ls = l;
+  }
+  return .15 + smoothstep(0., 50., c) * depth * 4.;
+}
+
+
+float kset(vec3 p) {
+    float m=100.;
+	p=fract(p);
+    for (int i=0; i<4; i++) {
+    	p=abs(p)/dot(p,p)-.8;
+        m=min(m,abs(length(p)-1.));
+    }
+    m=exp(-10.*m);
+    return m;
+}
+
+mat3 lookat(vec3 dir,vec3 up) {
+	dir=normalize(dir);vec3 rt=normalize(cross(dir,normalize(up)));
+    return mat3(rt,cross(rt,dir),dir);
+}
+
+
+float rep( in float p, in float c, in float l)
+{
+    float q = p-c*clamp(floor(p/c),-l,l);
+    return q;
+}
+
+
+float sdTorus( vec3 p, vec2 tt )
+{
+  vec2 q = vec2(length(p.xz)-tt.x,p.y);
+  return length(q)-tt.y;
+}
+
+
+float sdRoundCone( vec3 p, float r1, float r2, float h )
+{
+  vec2 q = vec2( length(p.xz), p.y );
+    
+  float b = (r1-r2)/h;
+  float a = sqrt(1.0-b*b);
+  float k = dot(q,vec2(-b,a));
+    
+  if( k < 0.0 ) return length(q) - r1;
+  if( k > a*h ) return length(q-vec2(0.0,h)) - r2;
+        
+  return dot(q, vec2(a,b) ) - r1;
+}
+
+float sdLink( vec3 p, float le, float r1, float r2 )
+{
+  p=p.zxy;
+  vec3 q = vec3( p.x, max(abs(p.y)-le,0.0), p.z );
+  return length(vec2(length(q.xy)-r1,q.z)) - r2;
+}
+
+float sdSphere(vec3 p, float r) {
+    return length(p)-r;
+}
+
+float tentacle(vec3 p, float a, out vec3 pk) {
+	p.yz*=rot(.5);
+    p.z-=.2;
+    p.y-=2.;
+    p.z+=sin(p.y*1.5+t*2.+a*2.)*p.y*.1;
+    p.x+=cos(p.y+t+a)*p.y*.1;
+    float d=sdRoundCone(p,1.,.3,4.5);
+    pk=p;
+	p.z-=1.-p.y*.15;
+    p.y-=2.;
+    p.y=rep(p.y,1.,2.);
+    d=min(d,sdTorus(p.xzy,vec2(.2,.1)));
+    return d*.7;
+}
+
+
+float arm(vec3 p, float a, out vec3 pk) {
+	p.x+=p.y*.5;
+    p.z-=.5;
+    p.yz*=rot(.7);
+    p.z+=sin(p.y+t+a)*p.y*.15;
+    float d=sdRoundCone(p,.8,.3,3.5);
+    pk=p;
+    return d*.8;
+
+}
+
+float head(vec3 pos, out vec3 pk) {
+    pos.xz*=rot(sin(t*.5)*.15);
+    pos.yz*=rot(camdir.y*.5);
+    pos.xy*=rot(camdir.x*.5);
+    pos.x*=1.05;
+	pos.z+=.2;
+    pk=pos;
+    vec3 p=pos;
+    p.y*=1.3;
+    float d=length(p*(vec3(vec2(1.)-p.z*.2,1.)))-2.3;
+    p.z+=1.8;
+    p.z*=1.2;
+    p*=1.+smoothstep(-2.,.5,p.z)*.3;
+	d=smin(length(p+vec3(0.,.1*p.z,0.))-2.6,d,.5);
+    p.y+=2.8;
+    p.z-=.3;
+    p.y-=smoothstep(0.,1.,abs(p.x))*.5;
+    p.z+=smoothstep(0.,1.,abs(p.x))*.5;
+    p.z*=1.-smoothstep(1.,0.,abs(p.x))*.2;
+    p.y-=smoothstep(-2.,2.,p.z);
+ 	d=smin(sdLink(p,1.,.7,.4),d,.2);   
+    p=pos;
+    p.z+=1.9;
+    p.y+=.7;
+    p.x=abs(p.x);
+    p.x-=.5;
+    d=smin(d,length(p)-1.12,.05);
+    p.y+=.5;
+    p.z-=.1;
+    d=ssub(length(p*vec3(1.,1.+tan(t*.5)*.02,1.5))-.6,d,.5);
+    p=pos;
+    p.z+=.6;
+    p.z*=5.+smoothstep(.3,.0,sin(t*.5))*8.;
+    p.z+=p.x*p.x+p.x*.5;
+    float mo=max(length(p.xz)-.2,p.y);
+    d=ssub(mo*.8,d,.7);
+    colmo=step(mo-.5,d);
+    return d*.8;
+}
+
+float eyes(vec3 p) {
+    p.xz*=rot(sin(t*.5)*.15);
+    p.yz*=rot(camdir.y*.5);
+    p.xy*=rot(camdir.x*.5);
+    float s=sign(p.x);
+    p.x=abs(p.x);
+    p.y+=1.2;
+    p.x-=.5;
+    p.z+=2.;
+	float d=length(p)-.6;
+    float m=smoothstep(.5,.0,sin(t*.5));
+    p.yz*=rot(camdir.y*m+.2);
+    p.xy*=rot(camdir.x*s*m);
+    p.x+=.05;
+    colpup=step(length(p.xz*vec2(1.3,1.)),.3);
+    eyered=smoothstep(.45,.6,length(p.xz));
+    return d;
+}
+
+float body(vec3 pos) {
+    vec3 posave=pos;
+   	pos.xy*=rot(radians(90.));
+	float d=1000.;
+    vec3 pt;
+    vec3 pk=pos;
+	pos.x=-abs(pos.x);
+    for(float a=0.;a<3.;a++) {
+        pos.xy*=rot(.8);
+        vec3 p=pos-vec3(0.,2.5,0);
+		float ten=tentacle(pos,a,pt);
+        if (ten<d) pk=pt;
+        d=smin(ten,d,.2);
+    }
+    //k=kset(pk);
+    pp=pk;
+   	pos=posave;
+    pos.z+=.7;
+    pos.xy*=rot(radians(90.));
+    float a=sign(pos.y);
+    pos.y=abs(pos.y);
+    pos.y-=1.8;
+	float ar=arm(pos,a,pk);
+    if (ar<d) pp=pk-vec3(0.,0.,10.);
+    d=smin(ar,d,.1);
+    return d;
+}
+
+float de(vec3 p) {
+    //pos.y*=1.5;
+    p.yz*=rot(1.2);
+//    vec2 r=radians(mous.xy*200.);
+//    p.xy*=rot(r.x);
+//    p.yz*=rot(r.y);
+    float bo=body(p);
+    vec3 pk;
+    float he=head(p,pk);
+    float ey=eyes(p);
+    float d=bo;
+    d=smin(he,d,.3);
+    d=min(ey,d);
+    coley=step(ey,d);
+	if (he+.3<bo) pp=pk-vec3(0.,0.,1.);
+    return d;
+}
+
+vec3 normal(vec3 p) {
+	vec2 d=vec2(0.,det);
+    return normalize(vec3(de(p+d.yxx),de(p+d.xyx),de(p+d.xxy))-de(p));
+}
+
+float ao(vec3 p, vec3 n) {
+	float st=.05;
+	float ao=0.;
+    for(float i=0.; i<6.; i++ ) {
+        float td=st*i+.1;
+        float d=de(p+n*td);
+        ao+=max(0.,(td-d)/td);
+    }
+    return clamp(1.-ao*.15,0.,1.);
+}
+
+
+vec3 shade(vec3 p, vec3 dir) {
+	vec3 pk=pp;
+    float ey=coley;
+    float mo=colmo;
+    float pu=colpup;
+    float re=eyered;
+    vec3 n=normal(p);
+	float aoc=ao(p,n);
+    coltop=mix(coltop,colbot,kset(pk)*.1);
+    vec3 col=mix(coltop,colbot,max(0.,pk.z+.2))+0.*(clamp(kset(pk),0.,1.)*.2-.1);
+    if (ey==1.) col=mix(coleye1,coleye2,re);
+    if (mo==1.) col=vec3(.25,.1,.0);
+    if (pu==1.&&ey==1.) col=vec3(0.);
+    float amb=max(0.,dot(dir,-n))*.5+.1;
+    float dif=max(0.,dot(ldir,n));
+    vec3 ref=reflect(dir,n);
+    float spe=pow(max(0.,dot(ldir,ref)),10.)*.4*(1.-mo);
+    spe+=pow(max(0.,dot(dir,-ref)),50.)*(.2+ey);
+    return col*(dif+amb)+spe*normalize(colwater+ey*2.)*specular;
+}
+
+
+vec3 march(vec3 from, vec3 dir) {
+    float d,td=0.;
+    vec3 c=vec3(0.);
+    vec3 p = from + dir * 3.;
+    float fg = water(p) * .3;
+    for(int i=0; i<100; i++){
+        p=from+td*dir;
+        d=de(p);
+        if (d<det || td>md) break;
+        td+=d;
+    }
+    if (d<det) {
+        p-=det*dir;
+        c=shade(p, dir);
+    } 
+    p=dir*5.;
+    vec3 bk = water(p) * colwater;
+    float glow = pow(max(0., dot(dir, ldir)), 1.5);
+    vec3 glow_water = normalize(colwater+1.);
+    bk += glow_water*(glow + pow(glow, 8.) * 1.5) ;
+    float fade=smoothstep(10.,30.,td);
+    if (d<det) c = mix(c,colwater*.2,fade); else c=bk;
+    return c+fg*colwater;
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+ 	ldir=normalize(vec3(.5,3.,-.5));
+    mous=iMouse.xy/iResolution.xy-.5;
+//    if (iMouse.z <.01) mous=vec2(.1,0.);
+    vec2 uv = fragCoord/iResolution.xy - .5;
+    uv.x*=iResolution.x/iResolution.y;
+	vec2 r=radians(mouse*200.-100.);    
+    vec3 from=vec3(0.,mouse.y*30.-15.,-15.);
+    vec3 dir=normalize(vec3(uv,1.));
+//    from.yz*=rot(r.y);
+//    dir.yz*=rot(r.y);
+    camdir=normalize(from);
+    dir=lookat(-camdir,vec3(0.,1.,0.))*dir;
+    from.xz*=rot(-r.x);
+    dir.xz*=rot(-r.x);
+    camdir.xz*=rot(-r.x);
+    vec3 col = march(from, dir);
+    fragColor = vec4(col,1.0);
+}
+
+// shadertoy end --------------------------------------------------------
+
+
+
+void main() {
+    vec4 color = vec4(0.);
+    mainImage(color,gl_FragCoord.xy);
+    gl_FragColor = color;
+}
+
+		</script>
+		
+		<!-- FIN DEL CODIGO DEL SHADER -->
+
+
+
+
+		<script id="fragmentShader" type="x-shader/x-fragment">
+
+			#ifdef GL_ES
+			precision mediump float;
+			#endif
+
+			uniform vec2 resolution;
+			uniform sampler2D texture;
+
+			void main() {
+
+				vec2 uv = gl_FragCoord.xy / resolution.xy;
+				gl_FragColor = texture2D( texture, uv );
+
+			}
+
+		</script>
+
+		<script id="vertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+
+			void main() {
+
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script id="surfaceVertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+			attribute vec2 surfacePosAttrib;
+			varying vec2 surfacePosition;
+
+			void main() {
+
+				surfacePosition = surfacePosAttrib;
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script>
+
+			if ( !window.requestAnimationFrame ) {
+
+				window.requestAnimationFrame = ( function() {
+
+					return window.webkitRequestAnimationFrame ||
+						window.mozRequestAnimationFrame ||
+						window.oRequestAnimationFrame ||
+						window.msRequestAnimationFrame ||
+						function ( callback, element ) {
+
+							window.setTimeout( callback, 1000 / 60 );
+
+						};
+
+				} )();
+
+			}
+
+			if (!Date.now) {
+				Date.now = function() {
+					return +new Date();
+				};
+			}
+
+
+			var quality = 1.;
+			var canvas, gl, buffer, currentProgram, vertexPosition, screenVertexPosition,
+			parameters = { startTime: Date.now(), time: 0, mouseX: 0.5, mouseY: 0.5, screenWidth: 0, screenHeight: 0 },
+			surface = { centerX: 0, centerY: 0, width: 1, height: 1, lastX: 0, lastY: 0 },
+			frontTarget, backTarget, screenProgram, getWebGL, resizer = {};
+
+			init();
+			if (gl) { animate(); }
+
+			function init() {
+
+				canvas = document.createElement( 'canvas' );
+				canvas.style.display = 'block';
+				document.body.appendChild( canvas );
+
+				// Initialise WebGL
+
+				try {
+
+					gl = canvas.getContext( 'experimental-webgl', { preserveDrawingBuffer: true } );
+
+				} catch( error ) { }
+
+				if ( !gl ) {
+
+					alert("WebGL not supported, but code will be shown.");
+
+				} else {
+
+					// Create vertex buffer (2 triangles)
+
+					buffer = gl.createBuffer();
+					gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [ - 1.0, - 1.0, 1.0, - 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0 ] ), gl.STATIC_DRAW );
+
+					// Create surface buffer (coordinates at screen corners)
+
+					surface.buffer = gl.createBuffer();
+				}
+
+
+				if (gl) {
+
+					var surfaceMouseDown = function ( event ) {
+
+
+						surface.lastX = event.clientX;
+						surface.lastY = event.clientY;
+						event.preventDefault();
+
+					};
+
+					var noContextMenu = function ( event ) {
+
+						event.preventDefault();
+
+					};
+
+					canvas.addEventListener( 'mousedown', surfaceMouseDown, false );
+
+					canvas.addEventListener( 'contextmenu', noContextMenu, false);
+				}
+
+				var clientXLast, clientYLast;
+
+				document.addEventListener( 'mousemove', function ( event ) {
+
+					var clientX = event.clientX;
+					var clientY = event.clientY;
+
+					if (clientXLast == clientX && clientYLast == clientY)
+						return;
+
+					clientXLast = clientX;
+					clientYLast = clientY;
+
+					parameters.mouseX = clientX / window.innerWidth;
+					parameters.mouseY = 1 - clientY / window.innerHeight;
+
+				}, false );
+
+				onWindowResize();
+				window.addEventListener( 'resize', onWindowResize, false );
+				compile();
+				compileScreenProgram();
+				parameters.startTime=Date.now();
+
+			}
+
+			function computeSurfaceCorners() {
+
+				if (gl) {
+
+					surface.width = surface.height * parameters.screenWidth / parameters.screenHeight;
+
+					var halfWidth = surface.width * 0.5, halfHeight = surface.height * 0.5;
+
+					gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [
+						surface.centerX - halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY + halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight ] ), gl.STATIC_DRAW );
+
+				}
+
+			}
+
+			function resetSurface() {
+
+				surface.centerX = surface.centerY = 0;
+				surface.height = 1;
+				computeSurfaceCorners();
+
+			}
+
+
+			function compile() {
+
+				var getSourceSynch = function(url) {
+					var req = new XMLHttpRequest();
+					req.open("GET", url, false);
+					req.send(null);
+					return req.responseText;
+				};
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'shader' ).textContent;
+				var vertex = document.getElementById( 'surfaceVertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				if ( vs == null || fs == null ) return null;
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				if ( currentProgram ) {
+
+					gl.deleteProgram( currentProgram );
+					setURL( fragment );
+
+				}
+
+				currentProgram = program;
+
+
+				// Cache uniforms
+
+				cacheUniformLocation( program, 'time' );
+				cacheUniformLocation( program, 'mouse' );
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'backbuffer' );
+				cacheUniformLocation( program, 'surfaceSize' );
+
+				// Load program into GPU
+
+				gl.useProgram( currentProgram );
+
+				// Set up buffers
+
+				surface.positionAttribute = gl.getAttribLocation(currentProgram, "surfacePosAttrib");
+				gl.enableVertexAttribArray(surface.positionAttribute);
+
+				vertexPosition = gl.getAttribLocation(currentProgram, "position");
+				gl.enableVertexAttribArray( vertexPosition );
+
+				console.log(gl.getShaderInfoLog(fs));
+			}
+
+			function compileScreenProgram() {
+
+				if (!gl) { return; }
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'fragmentShader' ).textContent;
+				var vertex = document.getElementById( 'vertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				screenProgram = program;
+
+				gl.useProgram( screenProgram );
+
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'texture' );
+
+				screenVertexPosition = gl.getAttribLocation(screenProgram, "position");
+				gl.enableVertexAttribArray( screenVertexPosition );
+
+			}
+
+			function cacheUniformLocation( program, label ) {
+
+				if ( program.uniformsCache === undefined ) {
+
+					program.uniformsCache = {};
+
+				}
+
+				program.uniformsCache[ label ] = gl.getUniformLocation( program, label );
+
+			}
+
+			//
+
+			function createTarget( width, height ) {
+
+				var target = {};
+
+				target.framebuffer = gl.createFramebuffer();
+				target.renderbuffer = gl.createRenderbuffer();
+				target.texture = gl.createTexture();
+
+				// set up framebuffer
+
+				gl.bindTexture( gl.TEXTURE_2D, target.texture );
+				gl.texImage2D( gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST );
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, target.framebuffer );
+				gl.framebufferTexture2D( gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0 );
+
+				// set up renderbuffer
+
+				gl.bindRenderbuffer( gl.RENDERBUFFER, target.renderbuffer );
+
+				gl.renderbufferStorage( gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, width, height );
+				gl.framebufferRenderbuffer( gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, target.renderbuffer );
+
+				// clean up
+
+				gl.bindTexture( gl.TEXTURE_2D, null );
+				gl.bindRenderbuffer( gl.RENDERBUFFER, null );
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null);
+
+				return target;
+
+			}
+
+			function createRenderTargets() {
+
+				frontTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+				backTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+
+			}
+
+			//
+
+
+			function createShader( src, type ) {
+
+				var shader = gl.createShader( type );
+				gl.shaderSource( shader, src );
+				gl.compileShader( shader );
+				return shader;
+
+			}
+
+			//
+
+			function onWindowResize( event ) {
+
+				var isMaxWidth = ((resizer.currentWidth === resizer.maxWidth) || (resizer.currentWidth === resizer.minWidth)),
+					isMaxHeight = ((resizer.currentHeight === resizer.maxHeight) || (resizer.currentHeight === resizer.minHeight));
+
+
+				resizer.isResizing = false;
+				resizer.maxWidth = window.innerWidth - 75;
+				resizer.maxHeight = window.innerHeight - 125;
+				if (isMaxWidth || (resizer.currentWidth > resizer.maxWidth)) {
+					resizer.currentWidth = resizer.maxWidth;
+				}
+				if (isMaxHeight || (resizer.currentHeight > resizer.maxHeight)) {
+					resizer.currentHeight = resizer.maxHeight;
+				}
+				if (resizer.currentWidth < resizer.minWidth) { resizer.currentWidth = resizer.minWidth; }
+				if (resizer.currentHeight < resizer.minHeight) { resizer.currentHeight = resizer.minHeight; }
+
+				canvas.width = window.innerWidth / quality;
+				canvas.height = window.innerHeight / quality;
+
+				canvas.style.width = window.innerWidth + 'px';
+				canvas.style.height = window.innerHeight + 'px';
+
+				parameters.screenWidth = canvas.width;
+				parameters.screenHeight = canvas.height;
+
+				computeSurfaceCorners();
+
+				if (gl) {
+
+					gl.viewport( 0, 0, canvas.width, canvas.height );
+
+					createRenderTargets();
+
+				}
+			}
+
+			//
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				render();
+
+			}
+
+			function render() {
+
+				if ( !currentProgram ) return;
+
+				parameters.time = Date.now() - parameters.startTime;
+
+				// Set uniforms for custom shader
+
+				gl.useProgram( currentProgram );
+
+				gl.uniform1f( currentProgram.uniformsCache[ 'time' ], parameters.time / 1000 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'mouse' ], parameters.mouseX, parameters.mouseY );
+				gl.uniform2f( currentProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( currentProgram.uniformsCache[ 'backbuffer' ], 0 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'surfaceSize' ], surface.width, surface.height );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+				gl.vertexAttribPointer( surface.positionAttribute, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( vertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE0 );
+				gl.bindTexture( gl.TEXTURE_2D, backTarget.texture );
+
+				// Render custom shader to front buffer
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, frontTarget.framebuffer );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Set uniforms for screen shader
+
+				gl.useProgram( screenProgram );
+
+				gl.uniform2f( screenProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( screenProgram.uniformsCache[ 'texture' ], 1 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( screenVertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE1 );
+				gl.bindTexture( gl.TEXTURE_2D, frontTarget.texture );
+
+				// Render front buffer to screen
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Swap buffers
+
+				var tmp = frontTarget;
+				frontTarget = backTarget;
+				backTarget = tmp;
+
+			}
+
+		</script>
+
+</body></html>

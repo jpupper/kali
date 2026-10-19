@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+	<script id="fxhash-snippet">
+      let alphabet = "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+      var fxhash = 'ooCe6q3yQRWHSihQsxiYAAPcXd4AsuxifH1Xwv65R4wD7hc7tyb'
+      let b58dec = (str) => str.split('').reduce((p,c,i) => p + alphabet.indexOf(c) * (Math.pow(alphabet.length, str.length-i-1)), 0)
+      let fxhashTrunc = fxhash.slice(2)
+      let regex = new RegExp(".{" + ((fxhash.length/4)|0) + "}", 'g')
+      let hashes = fxhashTrunc.match(regex).map(h => b58dec(h))
+      let sfc32 = (a, b, c, d) => {
+        return () => {
+          a |= 0; b |= 0; c |= 0; d |= 0
+          var t = (a + b | 0) + d | 0
+          d = d + 1 | 0
+          a = b ^ b >>> 9
+          b = c + (c << 3) | 0
+          c = c << 21 | c >>> 11
+          c = c + t | 0
+          return (t >>> 0) / 4294967296
+        }
+      }
+      var fxrand = sfc32(...hashes)
+</script>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+		<title>WebGL Test</title>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=Edge,chrome=1">
+		<style>
+
+			body {
+
+				background-color: #000000;
+				margin: 0;
+				padding: 0;
+				overflow: hidden;
+				border: 0;
+				width:100%;
+				height:100%;
+
+			}
+
+
+		</style>
+	</head>
+	<body style="cursor: default;">
+
+		
+
+		<script id="shader" type="x-shader/x-fragment">
+
+
+#ifdef GL_ES
+	precision highp float;
+#endif
+
+uniform float time;
+uniform vec2 mouse;
+uniform vec2 resolution;
+uniform float fxrand;
+
+#define iResolution resolution
+#define iMouse mouse
+#define iTime time
+
+// shadertoy begin ----------------------------------------------------
+
+/* 
+---------------------------------------------------------------------------------------
+
+ "Lonely Tree" by Pablo Roman Andrioli (Kali)
+ 
+ Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported License.
+
+ Please report any problems (I'm aware this shader could work slow on some systems)
+
+--------------------------------------------------------------------------------------- 
+*/
+
+
+//#define fxrand (iMouse.x/iResolution.x)
+#define hash1 hash11(fxrand)
+#define hash2 hash11(fxrand+.11)
+#define hash3 hash11(fxrand+.22)
+#define hash4 hash11(fxrand+.33)
+#define hash5 hash11(fxrand+.44)
+#define hash6 hash11(fxrand+.55)
+#define hash7 hash11(fxrand+.66)
+#define hash8 hash11(fxrand+.77)
+#define hash9 hash11(fxrand+.88)
+#define hash10 hash11(fxrand+.99)
+
+
+float hash11(float p)
+{
+    p*=1234.5678;
+    p = fract(p * .1031);
+    p *= p + 33.33;
+    return fract(2.*p*p);
+}
+
+
+float hash(vec2 p)
+{
+    p*=13.;
+	vec3 p3  = fract(vec3(p.xyx) * .1031);
+    p3 += dot(p3, p3.yzx + 33.33)+hash7;
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+
+
+vec3 hsv2rgb(vec3 c)
+{
+    vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+
+
+
+
+float noise( in vec2 p )
+{
+    vec2 i = floor( p );
+    vec2 f = fract( p );
+	
+	vec2 u = f*f*(3.0-2.0*f);
+
+    float no= mix( mix( hash( i + vec2(0.0,0.0) ), 
+                     hash( i + vec2(1.0,0.0) ), u.x),
+                mix( hash( i + vec2(0.0,1.0) ), 
+                     hash( i + vec2(1.0,1.0) ), u.x), u.y);
+    return pow(no,1.5);
+}
+
+
+float fbm(vec2 p) {
+    p*=3.;
+	float h=0.;
+	h+=noise(p*.7)*2.;
+	h+=noise(p*1.+1.2568)*.5;
+	h+=noise(p*3.+1.1257)*.3;
+	h+=noise(p*6.+1.6542)*.15;
+	return h;
+}
+
+
+
+
+
+// Params to play with:
+
+// Raytracer 
+
+#define viewsize .5    // reduced raytracing area for speeding up (>1 for full view)
+#define zoom 1.1 
+#define detail .02    // distance to stop tracing
+#define maxdist 28.    // scene depth
+#define maxsteps 100      // max ray steps
+
+// Light 
+
+#define lightdir vec3(1,-.6,0.) 
+#define diffuse .75
+#define specular .5
+#define specularexp 5.
+#define ambient .2
+
+// Tree shape
+// you can try to find better trees or even some really weird ones.
+
+#define inititer 37.   // Iterations to do at first run
+float maxiter;    // Max iterations to reach with mouse
+#define leavestart 29.  // Iteration to stop texturing and start green coloring
+float width; 
+float height;
+float branchsegments; // Number of segments for each branch
+#define scaling 0.905	   // Scaling factor at each iteration
+vec3 rotvector; // IFS rotation vector
+float rotangle;      // IFS rotation angle
+#define anglevary 0.2    // Angle variation at each iteration
+
+// Animation 
+
+#define amplitude .1   
+#define speed 0.8
+#define dynscaling 0.8 // Scaling factor for the dynamic fractal animation
+
+
+//-------------------------------------------------------------------------------------------
+
+vec3 dir;
+vec2 pix;
+vec2 coord;
+
+
+// Rotation function included in MathUtils.frag of Syntopia's Fragmentarium 
+mat3 rotationMat(vec3 v, float angle)
+{
+	float c = cos(angle);
+	float s = sin(angle);
+	
+	return mat3(c + (1.0 - c) * v.x * v.x, (1.0 - c) * v.x * v.y - s * v.z, (1.0 - c) * v.x * v.z + s * v.y,
+		(1.0 - c) * v.x * v.y + s * v.z, c + (1.0 - c) * v.y * v.y, (1.0 - c) * v.y * v.z - s * v.x,
+		(1.0 - c) * v.x * v.z - s * v.y, (1.0 - c) * v.y * v.z + s * v.x, c + (1.0 - c) * v.z * v.z
+		);
+}
+
+
+// Terrain heightmap
+float terrain(vec3 p){
+	float sm=smoothstep(2.,.0,length(p.xz))*.3;
+    //p.x+=1.5;
+	float h=(sin(p.x)+cos(p.z))*.25;
+	float l=length(p.xz);
+	p.xz*=1.5;
+	p.x+=l*.5;
+	h+=(cos(p.x)+sin(p.z))*.1;
+	p.xz*=1.3;
+	p.z+=l*.7;
+	h+=(cos(p.x)+sin(p.z))*.08;
+	h+=fbm(p.xz*.3)*.1+sm; //texture displacement
+	return p.y-h;
+}
+
+float totalit;
+
+// Scene DE
+vec2 DE(vec3 pos){
+	vec3 p=pos;
+	int n = 0;
+	float sc=1.;
+	float time=iTime*speed;
+	float amp=sin(time/2.)*amplitude;
+	float angle=radians(rotangle)/branchsegments;
+	float rotstart=0.;
+	float dtree;
+	float minit=maxiter;
+	vec3 minp=pos;
+	maxiter=min(maxiter,iTime*10.); //mouse iterations
+	totalit=0.;
+    for (float n=0.; n < 45.; n++) {
+        if (n>maxiter) break;
+		totalit++; //iter count
+		float d=length((p+vec3(0,sc,0))*vec3(1,.3,1))-width*sc; //branch segment
+		dtree = n<1.? d : dtree;
+        if (d<=dtree) { //test min distance and save iteration & vector
+			dtree=d;
+			minit=n;
+			minp=p;
+		}
+		if (mod(n,branchsegments) > branchsegments-2.) { 
+			p.x=abs(p.x); // fold after max segments reached for each branch
+			rotstart=1.; // start rotating at first fold
+		}
+        p*=rotationMat(normalize(rotvector),(angle+sin(time)*amp)*rotstart);
+		p.y-=height*sc; // go up
+		sc*=scaling; // scale size
+		amp*=dynscaling; // scale amplitude
+		time/=dynscaling; // scale time
+		angle+=radians(anglevary); // vary rotation
+	}
+    dtree+=length(fbm(8.*vec2(minp.y*2.,atan(minp.x,minp.z)*1.)))*.01*step(minit,leavestart);
+	float dterr=terrain(pos);
+	float de=min(dterr,dtree);
+	float col;
+	if (de==dterr) col=0.; else col=minit+1.; // return coloring parameter
+	return vec2(de,col);
+}
+
+
+// finite difference normal
+vec3 normal(vec3 pos) {
+	vec3 e = vec3(0.0,detail,0.0);
+	
+	return normalize(vec3(
+			DE(pos+e.yxx).x-DE(pos-e.yxx).x,
+			DE(pos+e.xyx).x-DE(pos-e.xyx).x,
+			DE(pos+e.xxy).x-DE(pos-e.xxy).x
+			)
+		);	
+}
+
+// coloring
+vec3 color(float obj, vec3 p) {
+
+	if (obj<1.) { //terrain texture
+		vec3 tex=vec3(1.,.7,.5)*.4;
+		return mix(vec3(.65,.6,.3),tex,.75)*(.5+smoothstep(0.,1.0,length(p.xz)*.35));
+	} 
+	else if (obj>0. && obj<leavestart) { //branches
+		return vec3(.55,.4,.25);
+	} else { //leaves (vary brightness by iteration, kind of fake AO)
+		return vec3(.80,1,.6)*1.1*(1.-.7*(totalit-obj)/(totalit-leavestart));
+	}
+	
+}
+
+//lighting
+vec3 light(vec3 p) {
+    vec3 ldir=normalize(lightdir);
+    vec3 n=normal(p);
+    float diff=max(max(0.0,dot(-n, ldir))*diffuse,ambient);
+    vec3 r = reflect(ldir,n);
+    float spec=max(0.,dot(dir,-r));
+    return vec3(diff+pow(spec,specularexp)*specular);	
+}
+
+//raytracing
+vec3 trace(vec3 from, vec3 dir) {
+	vec3 p;
+	float totdist=0.;
+	vec3 col;
+	vec2 d;
+	for (int i=1; i<maxsteps; i++) {
+		p=from+totdist*dir;
+		d=DE(p);
+		if (d.x<detail || totdist>maxdist) break;
+		totdist+=d.x; 
+	}
+	vec3 back=mix(vec3(.9),vec3(.6,.7,.8),clamp((dir.y+.15)*6.,0.,1.)); //background gradient
+    if (d.x<detail) {
+		col=color(d.y,p)*light(p-detail*dir*.5); //apply color+light
+		col=mix(col,back,smoothstep(0.,1.,totdist*totdist/maxdist*.03)); //a bit of fog
+	} else { //background sky with moving clouds (and some contrails? :D)
+		col=back+hash8*vec3(1,.9,.6)*fbm(
+		15.*vec2(dir.y*4.,atan(dir.z,dir.x)*1.5+iTime*.03)*.15)*(dir.y*.7+.15);
+	}
+	return col;
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+
+    maxiter=35.+15.*hash1;
+    width=.5-.3*hash2;
+    height=.5+.1*hash4;
+    branchsegments=3.+step(.5,hash5);
+    rotangle=80.+hash6*40.;
+    rotvector=vec3(-0.3,-1.,hash9*.7);
+    
+    //Camera
+	//limited view angle to reduce symmetry appreciation
+	//(introducing assymmetry breaks the distance field, any suggestions?)
+	pix=fragCoord.xy / iResolution.xy;
+	float viewangle=-20.-40.*hash3; 
+	mat3 rotview=rotationMat(vec3(0.,1.,0.),radians(viewangle));
+	coord = pix-vec2(.5);
+	coord.x*=iResolution.x/iResolution.y;
+	vec3 from=vec3(0.,0.,7.5)*rotview*zoom;
+	from+=vec3(0.,3,0.);
+	dir=normalize(vec3(coord,-1.))*rotview;
+	vec3 col=vec3(0.);
+	float view=length(coord*vec2(.8,1.)*4.);
+	col=trace(from,dir); 	//trace only inside view area
+	col=col*.9+vec3(.1); //desaturate a bit
+	//col = mix(col, vec3(0.73), smoothstep(0.5,1.,view*view/pow(viewsize*2.,2.))); //smooth edges
+	fragColor = vec4(col,1)-hash(fragCoord)*.1;
+}
+
+// shadertoy end --------------------------------------------------------
+
+
+
+void main() {
+    vec4 color = vec4(0.);
+    mainImage(color,gl_FragCoord.xy);
+    gl_FragColor = color;
+}
+
+		</script>
+		
+		
+
+
+
+
+		<script id="fragmentShader" type="x-shader/x-fragment">
+
+			#ifdef GL_ES
+			precision mediump float;
+			#endif
+
+			uniform vec2 resolution;
+			uniform sampler2D texture;
+
+			void main() {
+
+				vec2 uv = gl_FragCoord.xy / resolution.xy;
+				gl_FragColor = texture2D( texture, uv );
+
+			}
+
+		</script>
+
+		<script id="vertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+
+			void main() {
+
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script id="surfaceVertexShader" type="x-shader/x-vertex">
+
+			attribute vec3 position;
+			attribute vec2 surfacePosAttrib;
+			varying vec2 surfacePosition;
+
+			void main() {
+
+				surfacePosition = surfacePosAttrib;
+				gl_Position = vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script>
+
+			if ( !window.requestAnimationFrame ) {
+
+				window.requestAnimationFrame = ( function() {
+
+					return window.webkitRequestAnimationFrame ||
+						window.mozRequestAnimationFrame ||
+						window.oRequestAnimationFrame ||
+						window.msRequestAnimationFrame ||
+						function ( callback, element ) {
+
+							window.setTimeout( callback, 1000 / 60 );
+
+						};
+
+				} )();
+
+			}
+
+			if (!Date.now) {
+				Date.now = function() {
+					return +new Date();
+				};
+			}
+
+
+			var quality = 1.5;
+			var canvas, gl, buffer, currentProgram, vertexPosition, screenVertexPosition,
+			parameters = { startTime: Date.now(), time: 0, mouseX: 0.5, mouseY: 0.5, screenWidth: 0, screenHeight: 0, fxrand: fxrand() },
+			surface = { centerX: 0, centerY: 0, width: 1, height: 1, lastX: 0, lastY: 0 },
+			frontTarget, backTarget, screenProgram, getWebGL, resizer = {};
+
+			init();
+			if (gl) { animate(); }
+
+			function init() {
+
+				canvas = document.createElement( 'canvas' );
+				canvas.style.display = 'block';
+				document.body.appendChild( canvas );
+
+				// Initialise WebGL
+
+				try {
+
+					gl = canvas.getContext( 'experimental-webgl', { preserveDrawingBuffer: true } );
+
+				} catch( error ) { }
+
+				if ( !gl ) {
+
+					alert("WebGL not supported, but code will be shown.");
+
+				} else {
+
+					// Create vertex buffer (2 triangles)
+
+					buffer = gl.createBuffer();
+					gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [ - 1.0, - 1.0, 1.0, - 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0, 1.0, - 1.0, 1.0 ] ), gl.STATIC_DRAW );
+
+					// Create surface buffer (coordinates at screen corners)
+
+					surface.buffer = gl.createBuffer();
+				}
+
+
+				if (gl) {
+
+					var surfaceMouseDown = function ( event ) {
+
+
+						surface.lastX = event.clientX;
+						surface.lastY = event.clientY;
+						event.preventDefault();
+
+					};
+
+					var noContextMenu = function ( event ) {
+
+						event.preventDefault();
+
+					};
+
+					canvas.addEventListener( 'mousedown', surfaceMouseDown, false );
+
+					canvas.addEventListener( 'contextmenu', noContextMenu, false);
+				}
+
+				var clientXLast, clientYLast;
+
+				document.addEventListener( 'mousemove', function ( event ) {
+
+					var clientX = event.clientX;
+					var clientY = event.clientY;
+
+					if (clientXLast == clientX && clientYLast == clientY)
+						return;
+
+					clientXLast = clientX;
+					clientYLast = clientY;
+
+					parameters.mouseX = clientX / window.innerWidth;
+					parameters.mouseY = 1 - clientY / window.innerHeight;
+
+				}, false );
+
+				onWindowResize();
+				window.addEventListener( 'resize', onWindowResize, false );
+				compile();
+				compileScreenProgram();
+				parameters.startTime=Date.now();
+
+			}
+
+			function computeSurfaceCorners() {
+
+				if (gl) {
+
+					surface.width = surface.height * parameters.screenWidth / parameters.screenHeight;
+
+					var halfWidth = surface.width * 0.5, halfHeight = surface.height * 0.5;
+
+					gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+					gl.bufferData( gl.ARRAY_BUFFER, new Float32Array( [
+						surface.centerX - halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight,
+						surface.centerX + halfWidth, surface.centerY - halfHeight,
+						surface.centerX + halfWidth, surface.centerY + halfHeight,
+						surface.centerX - halfWidth, surface.centerY + halfHeight ] ), gl.STATIC_DRAW );
+
+				}
+
+			}
+
+			function resetSurface() {
+
+				surface.centerX = surface.centerY = 0;
+				surface.height = 1;
+				computeSurfaceCorners();
+
+			}
+
+
+			function compile() {
+
+				var getSourceSynch = function(url) {
+					var req = new XMLHttpRequest();
+					req.open("GET", url, false);
+					req.send(null);
+					return req.responseText;
+				};
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'shader' ).textContent;
+				var vertex = document.getElementById( 'surfaceVertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				if ( vs == null || fs == null ) return null;
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				if ( currentProgram ) {
+
+					gl.deleteProgram( currentProgram );
+					setURL( fragment );
+
+				}
+
+				currentProgram = program;
+
+
+				// Cache uniforms
+
+				cacheUniformLocation( program, 'time' );
+				cacheUniformLocation( program, 'mouse' );
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'backbuffer' );
+				cacheUniformLocation( program, 'surfaceSize' );
+				cacheUniformLocation( program, 'fxrand' );
+
+				// Load program into GPU
+
+				gl.useProgram( currentProgram );
+
+				// Set up buffers
+
+				surface.positionAttribute = gl.getAttribLocation(currentProgram, "surfacePosAttrib");
+				gl.enableVertexAttribArray(surface.positionAttribute);
+
+				vertexPosition = gl.getAttribLocation(currentProgram, "position");
+				gl.enableVertexAttribArray( vertexPosition );
+
+				console.log(gl.getShaderInfoLog(fs));
+			}
+
+			function compileScreenProgram() {
+
+				if (!gl) { return; }
+
+				var program = gl.createProgram();
+				var fragment = document.getElementById( 'fragmentShader' ).textContent;
+				var vertex = document.getElementById( 'vertexShader' ).textContent;
+
+				var vs = createShader( vertex, gl.VERTEX_SHADER );
+				var fs = createShader( fragment, gl.FRAGMENT_SHADER );
+
+				gl.attachShader( program, vs );
+				gl.attachShader( program, fs );
+
+				gl.deleteShader( vs );
+				gl.deleteShader( fs );
+
+				gl.linkProgram( program );
+
+				screenProgram = program;
+
+				gl.useProgram( screenProgram );
+
+				cacheUniformLocation( program, 'resolution' );
+				cacheUniformLocation( program, 'texture' );
+
+				screenVertexPosition = gl.getAttribLocation(screenProgram, "position");
+				gl.enableVertexAttribArray( screenVertexPosition );
+
+			}
+
+			function cacheUniformLocation( program, label ) {
+
+				if ( program.uniformsCache === undefined ) {
+
+					program.uniformsCache = {};
+
+				}
+
+				program.uniformsCache[ label ] = gl.getUniformLocation( program, label );
+
+			}
+
+			//
+
+			function createTarget( width, height ) {
+
+				var target = {};
+
+				target.framebuffer = gl.createFramebuffer();
+				target.renderbuffer = gl.createRenderbuffer();
+				target.texture = gl.createTexture();
+
+				// set up framebuffer
+
+				gl.bindTexture( gl.TEXTURE_2D, target.texture );
+				gl.texImage2D( gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE );
+
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST );
+				gl.texParameteri( gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST );
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, target.framebuffer );
+				gl.framebufferTexture2D( gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0 );
+
+				// set up renderbuffer
+
+				gl.bindRenderbuffer( gl.RENDERBUFFER, target.renderbuffer );
+
+				gl.renderbufferStorage( gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, width, height );
+				gl.framebufferRenderbuffer( gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, target.renderbuffer );
+
+				// clean up
+
+				gl.bindTexture( gl.TEXTURE_2D, null );
+				gl.bindRenderbuffer( gl.RENDERBUFFER, null );
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null);
+
+				return target;
+
+			}
+
+			function createRenderTargets() {
+
+				frontTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+				backTarget = createTarget( parameters.screenWidth, parameters.screenHeight );
+
+			}
+
+			//
+
+
+			function createShader( src, type ) {
+
+				var shader = gl.createShader( type );
+				gl.shaderSource( shader, src );
+				gl.compileShader( shader );
+				return shader;
+
+			}
+
+			//
+
+			function onWindowResize( event ) {
+
+				var isMaxWidth = ((resizer.currentWidth === resizer.maxWidth) || (resizer.currentWidth === resizer.minWidth)),
+					isMaxHeight = ((resizer.currentHeight === resizer.maxHeight) || (resizer.currentHeight === resizer.minHeight));
+
+
+				resizer.isResizing = false;
+				resizer.maxWidth = window.innerWidth - 75;
+				resizer.maxHeight = window.innerHeight - 125;
+				if (isMaxWidth || (resizer.currentWidth > resizer.maxWidth)) {
+					resizer.currentWidth = resizer.maxWidth;
+				}
+				if (isMaxHeight || (resizer.currentHeight > resizer.maxHeight)) {
+					resizer.currentHeight = resizer.maxHeight;
+				}
+				if (resizer.currentWidth < resizer.minWidth) { resizer.currentWidth = resizer.minWidth; }
+				if (resizer.currentHeight < resizer.minHeight) { resizer.currentHeight = resizer.minHeight; }
+
+				canvas.width = window.innerWidth / quality;
+				canvas.height = window.innerHeight / quality;
+
+				canvas.style.width = window.innerWidth + 'px';
+				canvas.style.height = window.innerHeight + 'px';
+
+				parameters.screenWidth = canvas.width;
+				parameters.screenHeight = canvas.height;
+
+				computeSurfaceCorners();
+
+				if (gl) {
+
+					gl.viewport( 0, 0, canvas.width, canvas.height );
+
+					createRenderTargets();
+
+				}
+			}
+
+			//
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+				render();
+
+			}
+
+			function render() {
+
+				if ( !currentProgram ) return;
+
+				parameters.time = Date.now() - parameters.startTime;
+
+				// Set uniforms for custom shader
+
+				gl.useProgram( currentProgram );
+
+				gl.uniform1f( currentProgram.uniformsCache[ 'time' ], parameters.time / 1000 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'mouse' ], parameters.mouseX, parameters.mouseY );
+				gl.uniform1f( currentProgram.uniformsCache[ 'fxrand' ], parameters.fxrand );
+				gl.uniform2f( currentProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( currentProgram.uniformsCache[ 'backbuffer' ], 0 );
+				gl.uniform2f( currentProgram.uniformsCache[ 'surfaceSize' ], surface.width, surface.height );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, surface.buffer );
+				gl.vertexAttribPointer( surface.positionAttribute, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( vertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE0 );
+				gl.bindTexture( gl.TEXTURE_2D, backTarget.texture );
+
+				// Render custom shader to front buffer
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, frontTarget.framebuffer );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Set uniforms for screen shader
+
+				gl.useProgram( screenProgram );
+
+				gl.uniform2f( screenProgram.uniformsCache[ 'resolution' ], parameters.screenWidth, parameters.screenHeight );
+				gl.uniform1i( screenProgram.uniformsCache[ 'texture' ], 1 );
+
+				gl.bindBuffer( gl.ARRAY_BUFFER, buffer );
+				gl.vertexAttribPointer( screenVertexPosition, 2, gl.FLOAT, false, 0, 0 );
+
+				gl.activeTexture( gl.TEXTURE1 );
+				gl.bindTexture( gl.TEXTURE_2D, frontTarget.texture );
+
+				// Render front buffer to screen
+
+				gl.bindFramebuffer( gl.FRAMEBUFFER, null );
+
+				gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+				gl.drawArrays( gl.TRIANGLES, 0, 6 );
+
+				// Swap buffers
+
+				var tmp = frontTarget;
+				frontTarget = backTarget;
+				backTarget = tmp;
+
+			}
+
+		</script>
+</body></html>
